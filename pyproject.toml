@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "codex-account-manager"
+version = "0.1.0"
+description = "Codex account switching, quota monitoring and local conversation management for Windows."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+authors = [{ name = "Codex Account Manager contributors" }]
+keywords = [
+    "codex",
+    "openai",
+    "account-manager",
+    "quota-monitor",
+    "multi-account",
+    "windows",
+    "account-switcher",
+    "developer-tools",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: Developers",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+    "pydantic>=2",
+    "typer>=0.15",
+    "rich>=13",
+    "aiosqlite>=0.20",
+    "platformdirs>=4",
+    "psutil>=6",
+    "pywin32>=308; sys_platform == 'win32'",
+]
+
+[project.urls]
+Homepage = "https://github.com/erkanpulat/codex-account-manager"
+Repository = "https://github.com/erkanpulat/codex-account-manager"
+Issues = "https://github.com/erkanpulat/codex-account-manager/issues"
+Changelog = "https://github.com/erkanpulat/codex-account-manager/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+gui = ["PySide6==6.11.2"]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.9",
+    "mypy>=1.14",
+]
+
+[project.scripts]
+codex-accounts = "codex_account_manager.cli.main:app"
+cx = "codex_account_manager.cli.main:app"
+
+[project.gui-scripts]
+codex-account-manager = "codex_account_manager.gui.tray_main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+warn_unused_ignores = false
+check_untyped_defs = true

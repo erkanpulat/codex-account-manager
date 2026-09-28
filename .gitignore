@@ -1,0 +1,62 @@
+# --- Secrets & credentials (never commit) ---
+auth.json
+*.auth.json
+*.token
+*.jwt
+.env
+.env.*
+secrets.*
+credentials.*
+
+# --- Local account data and runtime state ---
+profiles/
+worktrees/
+state-backups/
+*.db
+*.db.bak
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.journal.json
+diagnostics-*.zip
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Python ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Build / packaging ---
+build/
+dist/
+*.spec.bak
+installer/Output/
+*.exe
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Recovery snapshots contain credentials.
+*.recovery.json
+*.auth-backup
+*.db-wal
+*.db-shm
+
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+CodexAccountManager-portable-*.zip
+codex-account-manager-source*.zip

@@ -1,0 +1,3 @@
+title = "Codex Account Manager secret scanning"
+[extend]
+useDefault = true

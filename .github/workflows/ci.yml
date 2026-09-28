@@ -1,0 +1,102 @@
+name: CI
+on:
+  push:
+    branches: [main, master, codex/release-validation]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  quality:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ['3.11', '3.12', '3.13']
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0
+      - run: python -m pip install -e ".[gui,dev]"
+      - run: python -m ruff check src tests scripts
+      - run: python -m ruff format --check src tests scripts
+      - run: python -m mypy src
+      - run: python -m pytest -q
+      - run: python -m pip check
+      - name: Verify clean installation with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $env:WIN_PD_OVERRIDE_LOCAL_APPDATA = Join-Path $env:RUNNER_TEMP "account-manager-bootstrap-local"
+          $env:WIN_PD_OVERRIDE_APPDATA = Join-Path $env:RUNNER_TEMP "account-manager-bootstrap-roaming"
+          python -m venv .venv
+          if ($LASTEXITCODE -ne 0) { throw "Virtual environment creation failed." }
+          ./scripts/bootstrap.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Bootstrap failed." }
+          ./.venv/Scripts/python.exe -m pip check
+  security-and-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e ".[gui,dev]" pip-audit bandit build
+      - run: python -m pip_audit --local --skip-editable
+      - run: python -m bandit -r src -ll
+      - run: python -m build
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-distributions
+          path: dist/*
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Scan complete Git history
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          "$(go env GOPATH)/bin/gitleaks" git --redact --log-opts="--all" .
+
+  windows-package:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e ".[gui]" pyinstaller
+      - run: python -m PyInstaller --clean --noconfirm packaging/CodexAccountManager.spec
+      - run: python scripts/verify_windows_package.py
+      - name: Compile Windows installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe" packaging/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "Installer compilation failed." }
+      - run: python scripts/verify_windows_installer.py
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-installer
+          path: installer/Output/*.exe
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-portable
+          path: dist/CodexAccountManager/

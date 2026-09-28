@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a problem with Codex Account Manager
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Never paste credentials or `auth.json` contents.**
+        Run `codex-accounts doctor --bundle` if needed. Review the archive and remove personal paths or account labels before attaching it.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. cx ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: codex-version
+    attributes:
+      label: Codex CLI version
+      placeholder: "codex --version"
+  - type: input
+    id: os
+    attributes:
+      label: OS / build
+      placeholder: "Windows 11 26xxx"
+  - type: input
+    id: app-version
+    attributes:
+      label: Codex Account Manager version
+      placeholder: "0.1.0"
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Output of `cx doctor` and/or the redacted bundle (drag & drop).
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Confirmation
+      options:
+        - label: I confirm this report contains no credentials or tokens.
+          required: true
