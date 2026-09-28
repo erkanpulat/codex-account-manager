@@ -1,18 +1,34 @@
 # Codex Hesap Yöneticisi
 
-**Birden fazla Codex hesabını tek cihazda yönetin, kullanım kotalarını takip edin ve hesaplar arasında geçiş yapın.**
+**Codex hesabını değiştir. Aynı Desktop sohbetinde çalışmaya devam et.**
+
+Hesaplarını ve kotalarını tek Windows uygulamasından yönet. Doğrulanmış bir kullanım limiti işi durdurduğunda, uygun hesaba otomatik geçiş yap ve aynı Desktop sohbetine devam isteği gönder.
+
+**[Windows için indir](https://github.com/erkanpulat/codex-account-manager/releases/latest)** · [Kurulum rehberi](#çalıştırma)
+
+Windows · Türkçe / English · MIT · Kurulum paketi Python içerir
+
+*OpenAI ile bağlantılı veya onaylanmış bir ürün değildir. Birden fazla hesap kullanımı, geçerli hizmet koşulları kapsamında sizin sorumluluğunuzdadır.*
+
+Desktop içinde devam bağlantısı deneyseldir ve Codex sürümüne bağlıdır. [Test edilen davranışlar ve sınırlar](docs/release-validation.md).
 
 [English](README.md) · [Güvenlik](SECURITY.md) · [Doğrulama raporu](docs/release-validation.md)
 
-![Türkçe başlangıç ekranı](docs/images/onboarding-tr.png)
+![Hesaplar, kullanım kotaları ve sıfırlama hakları](docs/images/overview-tr.png)
 
-## Ne işe yarar?
+*Ekran görüntüleri örnek hesaplarla üretilmiştir; gerçek hesap bilgisi içermez.*
 
-- Hesaplarınıza Kişisel veya İş gibi adlar verin ve resmî Codex giriş akışıyla oturum açın.
-- Hesapların kullanım kotalarını, yenilenme zamanlarını ve doğrulama durumlarını görün.
-- Codex Desktop’ın kullandığı hesabı değiştirirken ortak konuşma geçmişini koruyun.
-- Kaydedilen konuşmaları yükleyin ve yerel hedef kayıtlarını yönetin.
-- Türkçe/İngilizce arayüz, açık/koyu tema ve açıklamalı sistem kontrolünü kullanın.
+## Tek uygulamada üç temel iş
+
+- **Hesaplarını ve kotalarını gör.** Kullanım limitlerini, yenilenme zamanlarını ve etkin hesabı yapılandırma dosyası düzenlemeden takip et.
+- **Kota dolduğunda hesap değiştir.** Otomatik, onaylı veya manuel geçiş seç; hesap kimliği doğrulanır, başarısız geçişte kurtarma denenir.
+- **Desktop içinde devam et.** Çalışırken izlenen ve limitle kesildiği doğrulanan aynı sohbete, Codex hedefi ve Desktop araçlarıyla devam isteği gönder. Yerel konuşmalarını projeye göre bul.
+
+## Kullanım sıfırlama hakları
+
+Planlı kota yenilenmeleri ve sıfırlama hakları hesap kartında ayrı gösterilir. Hak sayısına tıklayarak durumunu, kapsamını, verilme ve sona erme zamanlarını yerel saatinle görebilirsin. Alınamayan bilgi sıfır olarak gösterilmez. Uygulama hak tüketmez ve hak kimliklerini saklamaz; bir hakkı kullanmak için Codex'te ilgili hesabın kullanım ayarlarını açmalısın.
+
+![Sıfırlama hakkının ayrıntıları](docs/images/reset-credits-tr.png)
 
 ## Çalıştırma
 
@@ -89,4 +105,4 @@ Kaynak sütunu konuşmanın Masaüstü/VS Code, CLI veya alt ajan kaydı olduğu
 
 Hesap giriş bilgileri ve ayarlar yerel cihazda saklanır. Uygulama telemetri toplamaz; Codex ise giriş ve hesap bilgileri için OpenAI’a bağlanır. Tanılama dışa aktarımı yalnızca kontrol durumlarını, doğrulanan CLI sürümünü ve hesap sayısını içerir; hesap adları, dosya yolları, ham hata metinleri ve günlükler eklenmez. Depodaki ekran görüntüleri örnek hesaplarla üretilmiştir.
 
-Bu bağımsız, MIT lisanslı proje resmî bir OpenAI ürünü değildir. Hesap kotalarını artırmaz. Test edilen kapsam ve bilinen sınırlamalar [doğrulama raporunda](docs/release-validation.md) listelenir.
+Bu bağımsız, MIT lisanslı proje resmî bir OpenAI ürünü değildir. "OpenAI" ve "Codex" OpenAI'ın ticari markalarıdır. Hesap kotalarını artırmaz. Bu aracı hesaplarınızla kullanırken geçerli tüm hizmet koşullarına uymak sizin sorumluluğunuzdadır. Test edilen kapsam ve bilinen sınırlamalar [doğrulama raporunda](docs/release-validation.md) listelenir.

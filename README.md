@@ -4,13 +4,19 @@
 
 # Codex Account Manager
 
-**Open-source Codex account manager for Windows: multi-account switching, quota monitoring and local conversations.**
+**Switch Codex accounts. Keep working in the same Desktop conversation.**
 
-Manage multiple OpenAI Codex accounts from a native desktop app or CLI. Monitor usage limits, switch accounts automatically when a quota is reached, and browse your local conversation history by project.
+Manage your Codex accounts and quotas in one Windows app. After a verified usage-limit interruption, automatically switch to an available account and request continuation in the same Desktop conversation.
+
+**[Download for Windows](https://github.com/erkanpulat/codex-account-manager/releases/latest)** · [Installation guide](#get-started)
+
+Desktop continuation is experimental and depends on your Codex version. [See tested behavior and limitations](docs/release-validation.md).
 
 [Türkçe](README.tr.md) · [Get started](#get-started) · [How switching works](docs/continuity.md) · [Security](SECURITY.md) · [Contributing](CONTRIBUTING.md)
 
-MIT · Python 3.11–3.13 · Native Qt desktop + CLI
+Windows · English / Türkçe · MIT · Installer includes Python
+
+*Not affiliated with or endorsed by OpenAI. Use of multiple accounts is your responsibility under the applicable terms of service.*
 
 </div>
 
@@ -18,18 +24,19 @@ MIT · Python 3.11–3.13 · Native Qt desktop + CLI
 
 *The real application, rendered with synthetic profiles. No account data is shown.*
 
-## What it does
+## Three things, one app
 
-- **Manage multiple Codex accounts.** Create a profile, sign in through the Codex CLI, and bind its identity. Rename and remove profiles without deleting shared conversation history.
-- **See quota and account health.** Primary and secondary usage windows, reset times, verified identity, active profile, and visible errors. Missing data stays unknown.
-- **Switch with recovery.** Verify the target, retain a restricted recovery snapshot, atomically replace credentials, restart the packaged Desktop, and verify the result. Failed or cancelled switches attempt recovery; incomplete recovery is retained for the next launch. Failures before credential mutation preserve the current login.
-- **Keep context together.** Browse local conversations with project/folder, source and search filters. Resize columns or hover to read full paths. A handoff can load a conversation and reconcile a saved local goal after the account switch commits.
-- **Choose how switching happens.** Automatic switching by default, with manual and confirmation modes available. Set a check interval from 30 to 3600 seconds in Settings (default: 60). Changes apply immediately.
-- **Use a native desktop or CLI.** Turkish/English interface, readable dark/light themes, guided onboarding, an About page, system tray, per-user Windows startup, and diagnostic exports without personal paths or account aliases.
+- **See your accounts and quotas.** Check usage windows, scheduled renewals, available reset credits and the active account without editing configuration files.
+- **Switch when a quota runs out.** Choose automatic, confirmation or manual switching, with identity checks and recovery if a switch fails.
+- **Continue in Desktop.** For an observed and verified limit interruption, request continuation in the same conversation with its native goal and Desktop tools. Browse your local conversations by project.
 
 **Native Desktop continuation is experimental.** After a verified limit and account switch, the app requests continuation through Desktop's own local tool channel. Two live quota-failure tests passed automatic switching, continuation in the same Desktop conversation, a fresh interactive browser call, native goal completion and tracking on the destination account. The integration uses a private, version-dependent protocol and polling can miss short turns; see [validation scope](docs/release-validation.md) and [continuity limitations](docs/continuity.md). Unavailable or incompatible channels fail visibly without a separate headless writer.
 
 **CLI continuation** is enabled by default under Settings for CLI, exec, and App Server conversations. While running, the app records the identity of active conversations at each configured check. After a verified usage-limit interruption and successful account handoff, it rechecks the same turn and goal before sending a continuation message. Historical limit errors that were never observed running are skipped. It follows an active goal until it completes or needs attention; it does not resume user-interrupted work, reset goal budgets or approve tools. Disable continuation in Settings to stop automatic work. Opening a conversation or saving a local goal note alone does not start a turn. This integration requires a Codex build with the relevant App Server methods and has a documented idle-check race; see [continuity and limitations](docs/continuity.md).
+
+## Usage reset credits
+
+Scheduled quota renewals and reset credits appear separately on each account card. Open the credit count to see its status, scope, grant time and expiry in your local timezone. Missing data stays unavailable; it is never presented as zero. The app does not redeem credits or store credit identifiers. Redeem a credit through the matching account in Codex.
 
 ## Get started
 
@@ -149,4 +156,4 @@ CI runs lint, type checks, tests on Windows/Linux and Python 3.11–3.13, depend
 
 [Architecture](CONTRIBUTING.md#code-structure) · [Codex protocol](CONTRIBUTING.md#codex-integration) · [Troubleshooting](docs/troubleshooting.md)
 
-MIT licensed. Independent community software, not affiliated with or endorsed by OpenAI. OpenAI and Codex are their respective trademarks.
+MIT licensed. Independent community software, not affiliated with or endorsed by OpenAI. "OpenAI" and "Codex" are trademarks of OpenAI. You are responsible for complying with all applicable terms of service when using this tool with your accounts.

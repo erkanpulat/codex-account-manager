@@ -7,7 +7,7 @@
 ; start-with-Windows, and an uninstaller.
 
 #define AppName "Codex Account Manager"
-#define AppVersion "0.1.0"
+#define AppVersion "0.1.1"
 #define AppExe "CodexAccountManager.exe"
 #define AppPublisher "Codex Account Manager contributors"
 #ifndef BundleRoot

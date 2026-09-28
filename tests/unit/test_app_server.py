@@ -338,3 +338,61 @@ async def test_cli_conversations_allow_headless_compatibility_check(monkeypatch,
         server, "_request", AsyncMock(return_value={"thread": {"id": "t", "source": source}})
     )
     await server.require_headless_compatible("t")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        {},
+        {"availableCount": -1},
+        {"availableCount": True},
+        {"availableCount": 1, "credits": [None]},
+    ],
+)
+def test_reset_credits_invalid_is_unknown(value):
+    assert CodexAppServer._reset_credits(value) is None
+
+
+def test_reset_credits_distinguishes_missing_details_and_zero():
+    summary = CodexAppServer._reset_credits({"availableCount": 2})
+    assert summary.available_count == 2 and summary.credits is None
+    empty = CodexAppServer._reset_credits({"availableCount": 0, "credits": []})
+    assert empty.available_count == 0 and empty.credits == ()
+
+
+async def test_account_reads_reset_credit_details_without_consuming(monkeypatch):
+    server = CodexAppServer("test")
+    request = AsyncMock(
+        side_effect=[
+            {"account": {"id": "owner"}},
+            {
+                "rateLimitResetCredits": {
+                    "availableCount": 3,
+                    "credits": [
+                        {
+                            "id": "opaque-do-not-display",
+                            "status": "available",
+                            "resetType": "codexRateLimits",
+                            "grantedAt": 1800000000,
+                            "expiresAt": 1801000000,
+                            "title": "Full reset",
+                            "description": "Weekly and primary window",
+                        }
+                    ],
+                }
+            },
+        ]
+    )
+    monkeypatch.setattr(server, "_request", request)
+    snapshot = await server.read_account()
+    credits = snapshot.reset_credits
+    assert credits.available_count == 3
+    assert len(credits.credits) == 1
+    assert credits.credits[0].expires_at == 1801000000
+    assert credits.credits[0].description == "Weekly and primary window"
+    assert "opaque-do-not-display" not in credits.model_dump_json()
+    assert [c.args[0] for c in request.await_args_list] == [
+        "account/read",
+        "account/rateLimits/read",
+    ]

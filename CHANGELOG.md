@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1 — 2026-09-28
+
+- Display usage reset credits on each account card. Shows available count and per-credit details (status, scope, granted/expiry times, description) in a plain-text dialog. Credit IDs are never stored or displayed; no credit is consumed by the app. Users are directed to Codex to redeem credits.
+- Updated account overview text, English/Turkish README and synthetic screenshots for clarity.
+- Keep installer and application versions aligned with an automated regression check.
+
 ## 0.1.0 — 2026-09-28
 
 - Windows desktop application and CLI for managing multiple OpenAI Codex accounts.

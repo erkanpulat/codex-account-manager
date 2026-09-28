@@ -2,6 +2,10 @@
 
 Claims are persisted before sending input. An uncertain delivery is never replayed.
 No conversation content or model output is stored in the attempt journal.
+
+This module does not bypass rate limits or manipulate quotas. It monitors for a
+``usageLimitExceeded`` error and switches to a *separate, independently registered*
+account. Users are responsible for complying with all applicable terms of service.
 """
 
 from __future__ import annotations

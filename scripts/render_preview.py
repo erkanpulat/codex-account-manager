@@ -9,11 +9,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from datetime import UTC, datetime
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtWidgets import QApplication, QDialog
 
 from codex_account_manager.continuity.tracking import ObservedWork, account_hash
-from codex_account_manager.domain.models import ProfileHealth, ThreadRecord
+from codex_account_manager.domain.models import (
+    ProfileHealth,
+    ResetCredit,
+    ResetCredits,
+    ThreadRecord,
+)
 from codex_account_manager.domain.states import QuotaState
 from codex_account_manager.gui.i18n import set_language, tr
 from codex_account_manager.gui.main_window import MainWindow
@@ -35,14 +40,29 @@ def sample_profiles() -> list[ProfileHealth]:
             plan_type=plan,
             primary_used_percent=primary,
             secondary_used_percent=secondary,
-            primary_resets_at=1790517600,
-            secondary_resets_at=1790690400,
+            primary_resets_at=1790856000,
+            secondary_resets_at=1791028800,
             ordinary_usage_allowed=primary < 100,
             auth_present=True,
             account_match=True,
             is_active=active,
             quota_state=QuotaState.AVAILABLE if primary < 100 else QuotaState.LIMITED_WITH_RESET,
             last_checked_at=datetime.now(UTC),
+            reset_credits=ResetCredits(
+                available_count=1 if active else 0,
+                credits=(
+                    ResetCredit(
+                        status="available",
+                        reset_type="codexRateLimits",
+                        granted_at=1790553600,
+                        expires_at=1791158400,
+                    ),
+                )
+                if active
+                else (),
+            )
+            if name != "Open source"
+            else None,
         )
         for name, plan, primary, secondary, active in (
             ("Personal", "plus", 28, 46, True),
@@ -142,7 +162,19 @@ def main() -> None:
     window.grab().save(str(output / "onboarding-tr.png"))
     window.dashboard._render(sample_profiles())
     app.processEvents()
-    window.grab().save(str(review / "overview-tr.png"))
+    window.grab().save(str(output / "overview-tr.png"))
+    from codex_account_manager.gui.widgets import AccountCard
+
+    def capture_credit_dialog():
+        for widget in app.topLevelWidgets():
+            if isinstance(widget, QDialog) and widget.isVisible():
+                widget.grab().save(str(output / "reset-credits-tr.png"))
+                widget.accept()
+
+    card = AccountCard(sample_profiles()[0])
+    QTimer.singleShot(100, capture_credit_dialog)
+    card._show_reset_credits(sample_profiles()[0])
+    card.deleteLater()
     window.nav.setCurrentRow(1)
     window.conversations._render_threads(sample_threads())
     source_account = account_hash("preview-personal-account")

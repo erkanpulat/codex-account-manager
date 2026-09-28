@@ -7,6 +7,10 @@ a profile's ``auth.json`` into the shared home *atomically*.
 This module only ever moves opaque bytes. It never parses, logs, or exposes the
 credential contents, and it uses ``os.replace`` so the shared ``auth.json`` is
 never left half-written.
+
+Credentials are protected by OS-level file permissions (Windows ACLs / Unix 0600)
+but are not encrypted at rest — the same approach used by the Codex CLI itself.
+See SECURITY.md for the full threat model.
 """
 
 from __future__ import annotations

@@ -33,6 +33,20 @@ class Profile(BaseModel):
     created_at: datetime = Field(default_factory=_now)
 
 
+class ResetCredit(BaseModel):
+    status: str
+    reset_type: str
+    granted_at: int
+    expires_at: int | None = None
+    title: str | None = None
+    description: str | None = None
+
+
+class ResetCredits(BaseModel):
+    available_count: int = Field(ge=0, strict=True)
+    credits: tuple[ResetCredit, ...] | None = None
+
+
 @dataclass(frozen=True)
 class AccountSnapshot:
     """A point-in-time read of an account via the App Server. No secrets."""
@@ -50,6 +64,7 @@ class AccountSnapshot:
     secondary_window_minutes: int | None
     rate_limit_reached_type: str | None = None
     has_credits: bool | None = None
+    reset_credits: ResetCredits | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +85,7 @@ class ProfileHealth:
     quota_state: QuotaState
     last_checked_at: datetime | None
     error: str | None = None
+    reset_credits: ResetCredits | None = None
 
 
 # Threads / goals / continuity

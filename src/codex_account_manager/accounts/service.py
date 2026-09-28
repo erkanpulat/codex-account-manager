@@ -212,6 +212,7 @@ class AccountService:
                 alias=profile.alias,
                 profile_id=profile.id,
                 plan_type=snapshot.plan_type,
+                reset_credits=snapshot.reset_credits if match is True else None,
                 primary_used_percent=snapshot.primary_used_percent,
                 secondary_used_percent=snapshot.secondary_used_percent,
                 primary_resets_at=snapshot.primary_resets_at,

@@ -3,6 +3,18 @@
 The channel is private and version-dependent. Failure never falls back to a
 separate conversation writer. Only read_thread and send_message_to_thread are
 exposed; model, approval and sandbox settings are never overridden.
+
+Security constraints:
+- The pipe server process path must match the expected Codex Desktop MSIX
+  package and belong to the current Windows user before data is exchanged.
+- ``callerSource`` and ``namespace`` are protocol-required values observed
+  from Desktop's internal communication. They select the relay protocol;
+  they are not an authentication mechanism. This application identifies itself via the App Server's
+  ``clientInfo`` during ``initialize`` (see app_server.py).
+- No debugging port is opened, no bundle is patched, and no approval or
+  sandbox preference is overridden.
+- The protocol was informed by codex-mcp-bridge's native relay
+  (https://github.com/buidangminh23/codex-mcp-bridge).
 """
 
 from __future__ import annotations
@@ -25,6 +37,7 @@ if TYPE_CHECKING:
 
 MAX_FRAME = 1024 * 1024
 PIPE_NAME = re.compile(r"codex-browser-use-[0-9a-f-]{36}", re.I)
+# Restrict connections to the expected installed MSIX package path.
 DESKTOP_EXECUTABLE = re.compile(
     r"[a-z]:\\Program Files\\WindowsApps\\OpenAI\.Codex_[0-9.]+_"
     r"(?:x64|arm64)__2p2nqsd0c76g0\\app\\(?:chatgpt|codex)\.exe",
@@ -226,6 +239,7 @@ class NativeDesktop:
             "method": "tools/call",
             "params": {
                 "arguments": arguments,
+                # Routing values required by the observed private relay protocol.
                 "callerSource": "codex",
                 "callId": request_id,
                 "namespace": "codex_app",

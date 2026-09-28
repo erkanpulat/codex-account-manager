@@ -384,7 +384,10 @@ def test_packaged_and_protocol_versions_match_project_metadata():
     from codex_account_manager import __version__
 
     metadata = tomllib.loads(Path("pyproject.toml").read_text("utf-8"))
-    assert metadata["project"]["version"] == __version__ == "0.1.0"
+    assert metadata["project"]["version"] == __version__ == "0.1.1"
+    assert f'#define AppVersion "{__version__}"' in Path("packaging/installer.iss").read_text(
+        "utf-8"
+    )
 
 
 def test_data_directory_resolves_redirected_filesystem_location(tmp_path, monkeypatch):

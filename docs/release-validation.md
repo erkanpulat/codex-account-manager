@@ -1,4 +1,18 @@
-# Release validation — 0.1.0
+# Release validation — 0.1.1
+
+## 0.1.1 update
+
+Checked locally on 28 September 2026: 384 tests passed. Ruff lint/format and
+Mypy (68 source files) passed. New coverage checks missing, zero, partial and
+malformed reset-credit responses, omission of credit identifiers, and plain-text
+GUI details separate from scheduled renewals. Credit redemption is not performed.
+The screenshots use synthetic profiles. For cross-platform and packaged results,
+inspect the CI run associated with the release commit.
+
+## 0.1.0 baseline
+
+The live Desktop handoff results below were obtained for 0.1.0; these tests were
+not repeated for the reset-credit display update.
 
 Checked on Windows 11 / Python 3.13, 27–28 September 2026. These results describe
 what was tested, not a guarantee that every workload or future Codex version works.

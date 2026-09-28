@@ -559,3 +559,48 @@ def test_tray_restores_hidden_minimized_window(window, app, reason):
     assert window.isVisible()
     assert not window.isMinimized()
     assert window.tray.contextMenu().parent() is window
+
+
+def test_reset_credit_details_are_plain_text_and_separate_from_renewals(app, monkeypatch):
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QDialog, QLabel, QPlainTextEdit, QPushButton
+
+    from codex_account_manager.domain.models import ResetCredit, ResetCredits
+    from codex_account_manager.gui.i18n import set_language
+    from codex_account_manager.gui.widgets import AccountCard
+
+    set_language("en")
+    health = replace(
+        sample_profiles()[0],
+        reset_credits=ResetCredits(
+            available_count=2,
+            credits=(
+                ResetCredit(
+                    status="available",
+                    reset_type="codexRateLimits",
+                    granted_at=1800000000,
+                    expires_at=None,
+                    title="<b>Untrusted title</b>",
+                    description="Example details",
+                ),
+            ),
+        ),
+    )
+    card = AccountCard(health)
+    displayed = []
+    monkeypatch.setattr(
+        QDialog,
+        "exec",
+        lambda dialog: displayed.append(dialog.findChild(QPlainTextEdit).toPlainText()),
+    )
+    button = next(
+        b for b in card.findChildren(QPushButton) if b.text().startswith("Reset credits:")
+    )
+    button.click()
+    assert "2 available" in displayed[0]
+    assert "<b>Untrusted title</b>" in displayed[0]
+    assert "No expiry" in displayed[0]
+    assert "only some credits" in displayed[0]
+    assert any("Scheduled renewals" in label.text() for label in card.findChildren(QLabel))
+    card.close()

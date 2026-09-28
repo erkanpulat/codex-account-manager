@@ -270,6 +270,37 @@ class CodexAppServer:
         self._capabilities = CapabilitySet(methods=frozenset(available))
         return self._capabilities
 
+    @staticmethod
+    def _reset_credits(value):
+        from pydantic import ValidationError
+
+        from codex_account_manager.domain.models import ResetCredits
+
+        if not isinstance(value, dict):
+            return None
+        rows = value.get("credits")
+        try:
+            return ResetCredits.model_validate(
+                {
+                    "available_count": value.get("availableCount"),
+                    "credits": None
+                    if rows is None
+                    else [
+                        {
+                            "status": row.get("status"),
+                            "reset_type": row.get("resetType"),
+                            "granted_at": row.get("grantedAt"),
+                            "expires_at": row.get("expiresAt"),
+                            "title": row.get("title"),
+                            "description": row.get("description"),
+                        }
+                        for row in rows
+                    ],
+                }
+            )
+        except (ValidationError, TypeError, AttributeError):
+            return None
+
     async def read_account(self) -> AccountSnapshot:
         account_result = await self._request("account/read", {"refreshToken": False})
         rate_result = await self._request("account/rateLimits/read")
@@ -306,6 +337,7 @@ class CodexAppServer:
             secondary_window_minutes=secondary.get("windowDurationMins"),
             rate_limit_reached_type=limits.get("rateLimitReachedType"),
             has_credits=credits.get("hasCredits"),
+            reset_credits=self._reset_credits(rate_result.get("rateLimitResetCredits")),
         )
 
     async def list_threads(

@@ -9,9 +9,12 @@ from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSizePolicy,
@@ -151,7 +154,7 @@ class AccountCard(QFrame):
         root.addWidget(self._secondary_usage)
         reset = label(
             tr(
-                "Resets: {primary} / {secondary}",
+                "Scheduled renewals (local time)\nPrimary quota: {primary}\nSecondary quota: {secondary}",
                 primary=_fmt_reset(health.primary_resets_at),
                 secondary=_fmt_reset(health.secondary_resets_at),
             ),
@@ -159,6 +162,16 @@ class AccountCard(QFrame):
         )
         reset.setWordWrap(True)
         root.addWidget(reset)
+        credits = health.reset_credits
+        credit_button = QPushButton(
+            tr("Reset credits: unavailable")
+            if credits is None
+            else tr("Reset credits: {count} available", count=credits.available_count)
+        )
+        credit_button.setObjectName("Secondary")
+        credit_button.setEnabled(credits is not None)
+        credit_button.clicked.connect(lambda: self._show_reset_credits(health))
+        root.addWidget(credit_button)
         footer = QHBoxLayout()
         detail = label(
             tr("Current workspace account")
@@ -186,3 +199,82 @@ class AccountCard(QFrame):
         root.addLayout(footer)
         if health.error:
             self.setToolTip(health.error)
+
+    def _show_reset_credits(self, health: ProfileHealth) -> None:
+        credits = health.reset_credits
+        if credits is None:
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(tr("Usage reset credits"))
+        dialog.resize(640, 480)
+        dialog.setMinimumSize(420, 320)
+        layout = QVBoxLayout(dialog)
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        lines = [
+            health.alias,
+            tr("Reset credits: {count} available", count=credits.available_count),
+            tr("These are separate from scheduled quota renewals. No credit is used here."),
+            tr(
+                "Last checked: {time}",
+                time=health.last_checked_at.astimezone().strftime("%d.%m.%Y %H:%M %Z")
+                if health.last_checked_at
+                else tr("Unknown"),
+            ),
+        ]
+        if credits.credits is None:
+            lines.append(tr("Credit details are unavailable."))
+        elif not credits.credits:
+            lines.append(tr("No credit details returned."))
+        else:
+            for credit in credits.credits:
+                state = {
+                    "available": tr("Available"),
+                    "redeeming": tr("Being redeemed"),
+                    "redeemed": tr("Redeemed"),
+                }.get(credit.status, tr("Unknown"))
+                if (
+                    credit.status == "available"
+                    and credit.expires_at is not None
+                    and credit.expires_at <= datetime.now().timestamp()
+                ):
+                    state = tr("Expired; refresh usage")
+                lines.extend(
+                    [
+                        "",
+                        credit.title or tr("Usage reset credit"),
+                        tr("Status: {value}", value=state),
+                        tr(
+                            "Scope: {value}",
+                            value=tr("Codex usage limits")
+                            if credit.reset_type == "codexRateLimits"
+                            else tr("Unknown"),
+                        ),
+                        tr("Granted: {time}", time=_fmt_reset(credit.granted_at)),
+                        tr(
+                            "Expires: {time}",
+                            time=_fmt_reset(credit.expires_at)
+                            if credit.expires_at is not None
+                            else tr("No expiry"),
+                        ),
+                    ]
+                )
+                if credit.description:
+                    lines.append(credit.description)
+            if len(credits.credits) < credits.available_count:
+                lines.append(tr("The server returned details for only some credits."))
+        lines.extend(
+            [
+                "",
+                tr(
+                    "To redeem a credit, open the matching account in Codex and review its usage settings. Times use your local timezone."
+                ),
+            ]
+        )
+        text.setPlainText("\n".join(lines))
+        layout.addWidget(text)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.button(QDialogButtonBox.StandardButton.Close).setText(tr("Close"))
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec()
