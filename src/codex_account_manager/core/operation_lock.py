@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import sys
 from pathlib import Path
 
-from codex_account_manager.core.errors import TransactionError
+from codex_account_manager.core.errors import OperationBusyError, TransactionError
 
 
 class OperationLock:
@@ -28,7 +29,12 @@ class OperationLock:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             os.close(fd)
-            raise TransactionError(
+            error_type = (
+                OperationBusyError
+                if exc.errno in {errno.EACCES, errno.EAGAIN, errno.EDEADLK}
+                else TransactionError
+            )
+            raise error_type(
                 "Another operation is in progress. Retry after it completes.", stage="prepare"
             ) from exc
         self._fd = fd

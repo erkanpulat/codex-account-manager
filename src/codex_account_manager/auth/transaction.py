@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -105,6 +106,12 @@ class AuthTransaction:
 
     def _arm_recovery(self) -> None:
         payload = json.loads(self.recovery_path.read_bytes())
+        # Desktop may rotate credentials while shutting down. Roll back to its final state.
+        for name in ("auth.json", "config.toml"):
+            source = self.credentials.shared_home / name
+            payload[name] = (
+                base64.b64encode(source.read_bytes()).decode() if source.exists() else None
+            )
         payload["credentials_may_have_changed"] = True
         atomic_write(self.recovery_path, json.dumps(payload).encode())
 
@@ -151,15 +158,25 @@ class AuthTransaction:
             return True
 
     async def switch(
-        self, target: Profile, *, after_switch: Callable[[], Awaitable[None]] | None = None
+        self,
+        target: Profile,
+        *,
+        after_switch: Callable[[], Awaitable[None]] | None = None,
+        before_desktop_stop: Callable[[], Awaitable[None]] | None = None,
     ) -> SwitchResult:
         with OperationLock(paths.data_dir / "account-operation.lock"):
             if self.recovery_path.exists():
                 self._restore()
-            return await self._switch_locked(target, after_switch=after_switch)
+            return await self._switch_locked(
+                target, after_switch=after_switch, before_desktop_stop=before_desktop_stop
+            )
 
     async def _switch_locked(
-        self, target: Profile, *, after_switch: Callable[[], Awaitable[None]] | None
+        self,
+        target: Profile,
+        *,
+        after_switch: Callable[[], Awaitable[None]] | None,
+        before_desktop_stop: Callable[[], Awaitable[None]] | None = None,
     ) -> SwitchResult:
         if not target.bound_account_id:
             raise TransactionError(
@@ -185,6 +202,8 @@ class AuthTransaction:
         new_auth = source.read_bytes()
         if not new_auth:
             raise TransactionError("Profile credentials are empty.", stage="prepare")
+        if before_desktop_stop is not None:
+            await before_desktop_stop()
         journal = _Journal(profile_id=target.id, profile_alias=target.alias)
         current_stage = TransactionStage.PREPARE
         snapshot_written = False
@@ -193,6 +212,7 @@ class AuthTransaction:
             nonlocal current_stage
             current_stage = value
             journal.record(value)
+            log.info("Account switch stage: %s (pid=%d).", value.value, os.getpid())
             bus.publish("switch.stage", stage=value.value, ok=True, alias=target.alias)
 
         try:
@@ -212,6 +232,7 @@ class AuthTransaction:
                 raise AccountMismatchError(
                     "Activated auth does not match the profile's bound account."
                 )
+            self.credentials.sync_active_to_profile(target.codex_home)
             if self.launch_desktop:
                 stage(TransactionStage.START_DESKTOP)
                 self.desktop.launch()

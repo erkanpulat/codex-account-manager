@@ -4,6 +4,22 @@ A handoff switches the shared Codex login and may load a chosen conversation. Au
 
 ## Transaction boundary
 
+The Windows GUI delegates startup through the existing Explorer desktop's `Document.Application`, before acquiring its singleton or opening user state. Creating a new `Shell.Application` object and calling `ShellExecute` directly is insufficient: a process can retain the launcher's Windows job membership even when Explorer appears as its parent. The isolated Windows lifetime test terminates the launcher's job and verifies that the delegated child survives. The internal `--from-windows-shell` argument prevents recursive delegation; it is not a public launch mode.
+
+Windows job inheritance and termination behavior are described in Microsoft's [nested jobs documentation](https://learn.microsoft.com/en-us/windows/win32/procthread/nested-jobs).
+
+Automatic failover separates conversation failures from shared resources. An unreadable IDE or CLI conversation is excluded from continuation and reported individually; verified work can still switch accounts. Running or unverified Desktop conversations defer the shared Desktop restart. Unknown ownership also defers that restart. Failed preparation blocks it only when the conversation depends on Desktop. Manual switches remain explicit operations. The scan is bounded and does not provide an atomic lock against another client starting work immediately afterward.
+
+After a committed switch, Desktop and IDE have independent continuation queues; CLI conversations run independently. Work sharing an IDE restart remains serialized. Native attempts have a three-minute deadline, and preparation has a twelve-second deadline per conversation. Concurrent workers share one account-session lock so a login cannot change underneath them; the final worker releases it even on cancellation. Each conversation loads in its own worker, so one load failure does not discard other prepared conversations. Jobs retains per-conversation results, and a successful submission does not dismiss another conversation's warning.
+
+Quota handoffs recheck shared Desktop work after target verification, inside the account-operation lock and before stopping Desktop. New running work, an unverified Desktop state, a changed account or paused/reset monitoring defers the switch. This narrows the observation-to-restart gap; upstream clients do not expose an atomic lock against starting a new turn. Disabling IDE continuation cancels only IDE workers and discards their waiting requests. Global continuation or monitoring controls retain their global scope.
+
+Verified tickets are persisted before shutdown in `pending_continuations`, without credentials or conversation text. After an unexpected process exit, enabled monitoring can recover tickets less than ten minutes old on the same destination account. The normal continuation worker rechecks the exact turn, goal, permissions and durable send claim. Changed accounts, stale tickets or disabled continuation are reported and removed; an uncertain send is never retried. Clearing tracked work also clears pending tickets.
+
+If Desktop or the IDE owner is not ready during the first bounded read after switching, an **unsent** ticket remains pending for the next monitoring poll, for at most ten minutes from preparation. A temporary failure to read the active account also preserves it. No delivery is retried after a send claim. Pausing monitoring clears waiting tickets. The UI distinguishes waiting for a connection from an operation requiring user attention.
+
+Historical failures present at the first observation are not automatically revived. A newer IDE turn can qualify between observations as described below. In Jobs, **Continue after verified limit** explicitly queues a selected conversation after confirmation. This requires monitoring and automatic continuation to be enabled, verified capacity on the active account, a current structured quota failure, an allowed unchanged goal and no previous send claim for that turn. Queueing does not establish successful continuation or verify an IDE's cached account. It may consume quota when the worker sends the request.
+
 1. Acquire the account operation lock. Recover any earlier interrupted switch.
 2. Require credentials and a bound target identity. With the real adapter, preserve refreshed active credentials in their matching profile and verify the target before stopping Desktop.
 3. Write a durable, restricted-access snapshot of the previous `auth.json` and `config.toml`.
@@ -18,7 +34,7 @@ Exceptions and coroutine cancellation after credential mutation may have started
 
 `manual` never initiates a switch. `confirm` presents a suggestion in the GUI. `availability_failover` switches automatically only when the current profile is definitively limited and the destination has credentials, a matching bound identity, and a known available quota state. Unknown accounts are not considered available.
 
-New installations default to `availability_failover`. Existing explicit choices are preserved. The GUI polls every 60 seconds by default; Settings accepts 30–3600 seconds. A saved setting wakes the watcher immediately and it reloads the policy and interval before its next check. Monitoring requires the GUI/tray process to remain running. After a failed automatic switch, the watcher waits at least five minutes before retrying the same source and destination, doubling the delay up to 30 minutes. This avoids restarting Desktop on every poll. A different target can be tried immediately. Automatic failover discovers running work among the 20 most recently updated non-subagent conversations and keeps previously observed work under observation. Observation uses at most four concurrent conversation reads, a two-second per-conversation deadline and a ten-second scan budget. The overall check allows thirty seconds including connection startup. Successful observations are published immediately; unavailable conversations keep their previous observations and produce a partial result. Only a verified limit transition on that same turn and source account is eligible. If none qualifies, it switches accounts without loading an unrelated conversation. This can differ from the window currently visible in Desktop; use an explicit CLI `--thread` when the exact conversation matters.
+New installations preselect `availability_failover` and `monitor_enabled` defaults to true. Pause monitoring in Overview or Settings; pausing leaves the watcher asleep until a settings change or an on-demand check. Existing explicit policy choices are preserved. While enabled, the GUI polls every 60 seconds by default; Settings accepts 30–3600 seconds. A saved setting wakes the watcher immediately and it reloads the policy and interval before its next check. Monitoring requires the GUI/tray process to remain running. Closing the window exits unless `keep_in_tray` is explicitly enabled; tray status makes that choice visible. An on-demand check while paused cannot switch accounts. After a failed automatic switch, the watcher waits at least five minutes before retrying the same source and destination, doubling the delay up to 30 minutes. This avoids restarting Desktop on every poll. A different target can be tried immediately. Automatic failover discovers running work among the 20 most recently updated non-subagent conversations and keeps previously observed work under observation. Observation uses at most four concurrent conversation reads, a two-second per-conversation deadline and a ten-second scan budget. The overall check allows thirty seconds including connection startup. Successful observations are published immediately; unavailable conversations keep their previous checkpoints but are marked unverified and produce a partial result. A successful full list removes observations of deleted conversations. Only a verified limit transition on that same turn and source account is eligible. If none qualifies, it switches accounts without loading an unrelated conversation. This can differ from the window currently visible in Desktop; use an explicit CLI `--thread` when the exact conversation matters.
 
 ## Goals
 
@@ -27,6 +43,23 @@ Only explicit checkpoints are restored. A conversation preview never becomes an 
 The local checkpoint stores an objective and revision. Native goal token budgets are not recreated. Clearing a local checkpoint prevents future restoration but does not delete the native Codex goal.
 
 Saving a local goal note does not call the native goal API or start a turn. Reading a Codex goal is also read-only. On a later load/handoff, a confirmed missing native goal may be restored from an active local note. Native `budgetLimited` remains blocked. A verified `usageLimited` goal may be reactivated after a successful account handoff when automatic continuation is enabled. Only its status is changed; the objective, token budget and accumulated usage are verified and preserved. Native read failures are stored as unknown, not as proof of absence. The API cannot distinguish an externally deleted goal from a goal lost during a handoff: clear the local note as well when you no longer want restoration.
+
+## Source and runtime verification
+
+Only `cli`, `exec` and `appServer` sources are eligible for headless continuation.
+The shared `vscode` source identifies a Desktop/IDE family, not a verified owner.
+Unknown and subagent sources do not fall back to Desktop. Desktop tickets require
+a matching native turn and goal fingerprint before switching and are revalidated
+after the switch. A missing native connection prevents ticket creation; it is not
+permission to transfer IDE work to another runtime. Native read access remains
+version-dependent and does not establish an atomic ownership lock.
+
+The UI's support check is read-only, bounded to twelve seconds plus subprocess
+cleanup, and starts only on request. Its result indicates source/connection
+availability, not eligibility for automatic continuation or proof of an IDE's
+active account. IDE-native continuation is opt-in and experimental, as described below. Project navigation
+passes one local directory to a detected editor executable without a shell,
+credential changes, process termination or model input.
 
 ## Desktop ownership
 
@@ -48,11 +81,6 @@ A task that starts and ends between observations may still be missed.
 
 This native protocol is private and version-dependent. The implementation was
 informed by [codex-mcp-bridge's native relay](https://github.com/buidangminh23/codex-mcp-bridge/blob/main/src/native-relay.mjs).
-Two live tests triggered real quota errors on already-limited accounts. Each
-passed automatic switching, continuation in the same Desktop test conversation,
-a fresh interactive browser call, goal completion and destination-account tracking.
-The test harness narrowed observation to that conversation and polled more often
-than the default interval. See [validation scope](release-validation.md).
 If the channel cannot be verified, the app reports the failure and keeps the
 pending work; it never silently transfers ownership to a headless process.
 
@@ -97,8 +125,8 @@ Codex goal** requests the current goal from Codex. The list is limited to the
 conversation history below it is separate and does not imply that every listed
 conversation is being tracked or will resume automatically.
 
-Before switching, the saved interruptions are revalidated. After switching, they
-are processed sequentially, with the exact turn and goal checked again before
+Before switching, the saved interruptions are revalidated. After switching, independent
+queues process them, with the exact turn and goal checked again before
 sending input. Changed or missing goals are not reconstructed from stale records.
 This persistence improves selection; it cannot make a Desktop-only goal readable
 through an App Server that does not expose that goal.
@@ -107,11 +135,40 @@ The default `auto_continue=true` preference is independent of the switching poli
 
 Before sending input, the worker rechecks the exact turn, target account, user setting and local/native goal states. The thread must be idle. It holds the account-operation lock while working; stop continuation before manually switching accounts or editing account credentials. A durable journal claims each source turn before input is sent. Lost acknowledgements or process crashes are not blindly retried; inspect the conversation when the app reports that attention is required.
 
-For CLI/App Server sources, the worker sends `turn/start` and consumes notifications until completion. Without a native goal, it runs one continuation turn. With an active goal, it rechecks state and continues until the goal completes, pauses, becomes blocked, exhausts its budget or requests intervention. Another verified account limit can trigger another handoff on the next monitoring check. A changed conversation, unsupported API, unknown goal state or other error stops automation visibly. The App Server does not currently expose an atomic idle-only `turn/start`: another client can start a turn between the idle check and the request, in which case Codex may steer the continuation input into that active turn. Disable automatic continuation if this race is unacceptable for your workflow.
+For CLI/App Server sources, the worker sends `turn/start` and consumes notifications until completion. Every 30 seconds without a terminal notification, it reads the exact owned turn to detect a missed completion or failed connection. Without a native goal, it runs one continuation turn. With an active goal, it rechecks state and continues until the goal completes, pauses, becomes blocked, exhausts its budget or requests intervention. Another verified account limit can trigger another handoff on the next monitoring check. A changed conversation, unsupported API, unknown goal state or other error stops that conversation's automation visibly. The App Server does not currently expose an atomic idle-only `turn/start`: another client can start a turn between the idle check and the request, in which case Codex may steer the continuation input into that active turn. Disable automatic continuation if this race is unacceptable for your workflow.
 
-Approval and user-input requests are never accepted automatically. The worker interrupts its own turn and asks the user to open the conversation in Codex. The separate connection cannot forward Desktop-specific interactive tools or guarantee that Desktop immediately displays its output; inspect/reload the same conversation there. Disabling continuation cancels the owned turn. Closing Account Manager also stops its worker. Completed and uncertain attempts are retained across restarts to prevent duplicate input.
+Approval and user-input requests are never accepted automatically. The worker interrupts its own turn and asks the user to open the conversation in Codex. The separate connection cannot forward Desktop-specific interactive tools or guarantee that Desktop immediately displays its output; inspect/reload the same conversation there. Disabling continuation cancels the owned turn. Closing QuotaCrew also stops its worker. Completed and uncertain attempts are retained across restarts to prevent duplicate input.
 
 The latest-turn query requires the experimental `thread/turns/list` method.
 Neither polling nor a successful live test guarantees unattended completion of
 every workload. An unsupported Codex version, an unobserved short turn, a changed
 goal or uncertain delivery stops continuation for review.
+
+
+## Experimental local IDE continuation
+
+The unreleased source checkout includes `ide_continue=false` by default. When enabled, local `vscode`-family conversations use their existing Codex owner over the Windows `codex-ipc` router. The router process must belong to the same Windows user and match packaged Codex Desktop or a detected standard editor executable. Remote, WSL and cloud owners are not supported. Opening an editor folder is separate from sending model input.
+
+The adapter discovers the owner, reads its latest turn, pending requests and goal, and rechecks ownership before sending. It inherits thread settings without overriding tools, model, approvals, sandbox or goal budgets. Busy/unknown state stops submission. A durable input claim prevents blind retries after an uncertain response; no separate CLI writer is started. Owner checks are not an atomic lock against another client starting a turn.
+
+Desktop and a local IDE can be open together. QuotaCrew does not install an editor extension; the IDE must already have OpenAI's Codex extension and an open local Codex conversation. VS Code's separate built-in chat providers are not Codex owners. A validated `Codex Desktop` originator uses the Desktop native channel even when IDE continuation is enabled. Other local owners use the IDE router; a routing failure does not start a separate writer.
+
+A failed owner's `systemError` is eligible only when the stored error on that exact turn verifies a quota failure; approvals, outstanding submissions and other runtime states still block delivery. After a committed account switch, the restarted owner's identity is discovered again with a bounded wait. Subsequent checks and submission must retain that identity and the original turn and goal. One failed conversation does not abort the remaining batch. Jobs → row menu → **Automatic continuation details** retains the latest 20 safe status/stage records; older versions did not record these details. No conversation text or raw error is saved in these records.
+
+This uses private protocol versions (discovery v1, snapshot v11, start-turn v2). IDE reads allow 16 MiB per frame, 32 MiB total and 64 messages, with cancellation and deadlines. Pipe reads use chunks of at most 64 KiB. Oversized responses produce a specific size warning instead of implying the editor is closed. The account cached inside the running extension is not independently readable. On 1 October, a controlled continuation initially failed at the old quota despite available shared credentials, then ran after refreshing VS Code and reopening the exact conversation. This verifies that local recovery case, not every editor version or an unattended combined quota cycle.
+
+**Optional VS Code refresh (`ide_refresh=false` by default).** Enable it under Settings → Conversations together with IDE continuation. Before a verified IDE continuation, the worker checks all discovered local IDE owners for running work or pending approvals. Only an explicit `no-client-found` discovery response can be skipped; other unknown states stop refresh. Exactly one same-user standard VS Code window and an existing local workspace are required. The app sends a normal close request, waits up to 30 seconds without terminating the process or dismissing save dialogs, reopens the interrupted conversation's workspace, and routes `vscode://openai.chatgpt/local/<thread-id>` to the installed extension. VS Code's URI consent may need user approval; it is never suppressed. A fresh owner and the unchanged interrupted turn/goal are verified before sending. One account/process generation is refreshed once per supervisor lifetime. Cursor, Windsurf, multiple VS Code windows and remote/WSL workspaces are not supported by automatic refresh. Desktop tickets never enter this path.
+
+While monitoring, all supported conversation sources retain a latest-turn baseline. A newer turn with a verified quota error can be selected even if it began and failed between polls, provided the account, goal and tracking generation remain unchanged. A persisted running observation also covers this transition after restarting QuotaCrew. The first observed historical failure is never automatically revived. Pausing/resetting observation clears the baseline. Polling can still miss a conversation that has never been observed.
+
+During IDE startup, missing, busy or broken Windows pipes are treated as temporary read failures. Read-only discovery waits for the owner; an unsent ticket remains pending for up to ten minutes. The same transport failure during message submission is uncertain delivery and is never automatically replayed. Desktop jobs continue in their separate queue while the IDE reconnects.
+
+The Desktop relay label is not evidence of IDE delivery. Jobs → row menu → **Automatic continuation details** distinguishes preparation, editor refresh, connection waiting, submission and observed results.
+
+## Optional Windows shutdown
+
+Shutdown is disabled by default and never persisted. Each application session needs explicit confirmation for one condition: all saved accounts have verified limits, or a selected running conversation's exact turn/goal finishes. Available reset credits, unknown/stale quota, a changed goal, missing runtime information or observed running work prevent shutdown.
+
+The countdown accepts 1–1440 minutes and defaults to two minutes; 120 minutes is two hours and 180 minutes is three hours. It starts only after the selected condition is verified. The app checks every 60 seconds while waiting, every 15 seconds during the countdown, and once more before executing. Missing fresh evidence resets the countdown. The bottom notice and tray clock/menu expose the plan; both can cancel it. Quitting, closing without tray mode, or pausing active monitoring cancels it. This only observes supported local Codex work, not unsaved documents or activity in other programs. A new task can still start after the final check.
+
+The fixed Windows command uses the system `shutdown.exe /s /t 0` with no `/f`, shell, elevation or background helper. The countdown belongs to QuotaCrew: using a positive Windows `/t` would implicitly force applications closed. Windows may refuse or delay shutdown when applications need attention. Tests replace the shutdown function; the test suite never shuts down the machine.

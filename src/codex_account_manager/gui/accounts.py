@@ -1,27 +1,37 @@
-"""Accounts screen."""
+"""Saved accounts and sign-in controls."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QSignalBlocker
-from PySide6.QtGui import QAction
+import time
+
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QPushButton,
-    QTableWidgetItem,
+    QToolButton,
     QWidget,
 )
 
 from codex_account_manager.accounts.service import AccountService
+from codex_account_manager.continuity.policy import SwitchPolicy
+from codex_account_manager.domain.models import Profile, ProfileHealth
+from codex_account_manager.gui.account_table import AccountTable, account_sort_key, display_health
 from codex_account_manager.gui.async_runner import AsyncRunner
-from codex_account_manager.gui.design import DARK, make_icon
+from codex_account_manager.gui.design import DARK, set_button_icon
 from codex_account_manager.gui.dialogs import prompt_text
 from codex_account_manager.gui.i18n import (
     tr,
 )
-from codex_account_manager.gui.view_base import BaseView, table_widget, view_header
-from codex_account_manager.gui.widgets import label
+from codex_account_manager.gui.view_base import (
+    BaseView,
+    EmptyState,
+    metric_card,
+    page_panel,
+    view_header,
+)
+from codex_account_manager.gui.widgets import ComboBox, label
 
 
 class AccountsView(BaseView):
@@ -30,52 +40,171 @@ class AccountsView(BaseView):
         self.runner = runner
         self.accounts = accounts
         self._login_busy = False
+        self._busy = False
         self._loaded = False
+        self._menu_buttons: list[QToolButton] = []
+        self._profiles: list[Profile | ProfileHealth] = []
+        self._sort_mode = "name"
 
         add = QPushButton(tr(" Add profile"))
         add.setObjectName("Primary")
-        add.setIcon(make_icon("accounts", palette.on_primary))
+        set_button_icon(add, "accounts", palette.on_primary)
         add.clicked.connect(self._add)
+        self.add_button = add
         self._root.addWidget(
             view_header(
                 tr("Accounts"),
                 tr(
-                    "Add an account, select it, and sign in. Your login details stay on this device."
+                    "Add an account to open Codex sign-in automatically. Use each row's actions to manage saved accounts."
                 ),
                 add,
             )
         )
+        summary = QHBoxLayout()
+        summary.setSpacing(24)
+        self.total_card, self.total_value = metric_card(tr("Total accounts"))
+        self.ready_card, self.ready_value = metric_card(tr("Available accounts"))
+        self.attention_card, self.attention_value = metric_card(tr("Accounts needing attention"))
+        for card in (self.total_card, self.ready_card, self.attention_card):
+            summary.addWidget(card, 0)
+        summary.addStretch()
+        self._root.addLayout(summary)
+        panel, panel_layout = page_panel()
+        self._root.addWidget(panel, 1)
 
-        self.guide = label(
+        self.guide = EmptyState(
+            tr("Bring your first account"),
             tr(
-                "Getting started: Add account → Select the row → Sign in. Linking is automatic after sign-in."
+                "Start with a name you recognize. Sign in securely through Codex; your account is linked automatically."
             ),
-            "Body",
+            tr("Add a profile"),
+            self._add,
         )
-        self.guide.setWordWrap(True)
         self.guide.hide()
-        self._root.addWidget(self.guide)
-        self.table = table_widget([tr("Account name"), tr("Sign-in status")])
-        self._root.addWidget(self.table, 1)
+        panel_layout.addWidget(self.guide)
+        self.filters_host = QWidget()
+        filters = QHBoxLayout(self.filters_host)
+        filters.setContentsMargins(0, 0, 0, 0)
+        filters.setSpacing(12)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText(tr("Search accounts…"))
+        self.search.textChanged.connect(self._filter)
+        filters.addWidget(self.search, 1)
+        self.status_filter = ComboBox()
+        for text, value in (
+            ("All accounts", "all"),
+            ("Available accounts", "ready"),
+            ("Accounts needing attention", "attention"),
+        ):
+            self.status_filter.addItem(tr(text), value)
+        self.status_filter.currentIndexChanged.connect(self._filter)
+        filters.addWidget(self.status_filter)
+        panel_layout.addWidget(self.filters_host)
+        self.filters_host.hide()
+        self.table = AccountTable(palette)
+        self.table.sort_requested.connect(self._sort_column)
+        self.table.set_sort(self._sort_mode)
+        panel_layout.addWidget(self.table, 1)
         self.operation_status = label(tr("Loading saved accounts…"), "Accent")
         self.operation_status.setWordWrap(True)
-        self._root.addWidget(self.operation_status)
+        panel_layout.addWidget(self.operation_status)
 
-        self.action_bar = QWidget()
-        actions = QHBoxLayout(self.action_bar)
-        actions.setContentsMargins(0, 0, 0, 0)
-        actions.setSpacing(10)
-        self.selection_label = label(tr("Select an account"), "Muted")
-        self.selection_label.setWordWrap(True)
-        actions.addWidget(self.selection_label, 1)
-        sign_in = QPushButton(tr("Sign in"))
-        sign_in.setObjectName("Primary")
-        sign_in.clicked.connect(self._login)
-        self.more = QPushButton(tr("More actions"))
-        self.more.setObjectName("MenuButton")
-        menu = QMenu(self.more)
-        self._profile_actions: list[QPushButton | QAction] = [sign_in]
+    def refresh(self) -> None:
+        if self._busy:
+            return
+        self._busy = True
+        self.set_loading("accounts", True)
+        if not self._loaded:
+            self.operation_status.setText(tr("Loading saved accounts…"))
+            self.operation_status.show()
+        self.runner.submit(self.accounts.all_health(), self._render, self._load_failed)
+
+    def _load_failed(self, error: Exception) -> None:
+        self._busy = False
+        self.set_loading("accounts", False)
+        self.operation_status.setText(tr("Could not load accounts: {error}", error=error))
+        self.operation_status.show()
+
+    def _render(self, profiles: list[Profile | ProfileHealth]) -> None:
+        self._busy = False
+        self.set_loading("accounts", False)
+        self._loaded = True
+        self._profiles = profiles
+        if not self._login_busy:
+            self.operation_status.clear()
+        self.operation_status.setVisible(bool(self.operation_status.text()))
+        self.guide.setVisible(not profiles)
+        self.filters_host.setVisible(bool(profiles))
+        self.table.setVisible(bool(profiles))
+        self.total_value.setText(str(len(profiles)))
+        ready = sum(
+            SwitchPolicy._is_available(profile)
+            for profile in profiles
+            if isinstance(profile, ProfileHealth)
+        )
+        self.ready_value.setText(str(ready))
+        self.attention_value.setText(str(len(profiles) - ready))
+        self._filter()
+
+    def _sort_column(self, modes: tuple[str, str]) -> None:
+        self._sort_mode = modes[1] if self._sort_mode == modes[0] else modes[0]
+        self._filter()
+
+    def _filter(self, *_args) -> None:
+        self.table.palette_ = self.palette_
+        query = self.search.text().casefold().strip()
+        mode = self.status_filter.currentData()
+        profiles = [
+            display_health(profile)
+            for profile in self._profiles
+            if (
+                query in profile.alias.casefold()
+                or (
+                    isinstance(profile, ProfileHealth)
+                    and profile.account_match is True
+                    and query in (profile.email or "").casefold()
+                )
+            )
+            and (
+                mode == "all"
+                or (
+                    mode == "ready"
+                    and isinstance(profile, ProfileHealth)
+                    and SwitchPolicy._is_available(profile)
+                )
+                or (
+                    mode == "attention"
+                    and (
+                        not isinstance(profile, ProfileHealth)
+                        or not SwitchPolicy._is_available(profile)
+                    )
+                )
+            )
+        ]
+        ordered = sorted(
+            profiles,
+            key=lambda profile: account_sort_key(profile, self._sort_mode, time.time()),
+            reverse=self._sort_mode in {"name_desc", "status_desc"},
+        )
+        self.table.set_sort(self._sort_mode)
+        if self._profiles and not ordered:
+            self.table.show_state(
+                EmptyState(tr("No matching profiles"), tr("Try another name or account filter."))
+            )
+            self._menu_buttons.clear()
+            return
+        self.table.set_profiles(
+            ordered,
+            email_visible=True,
+            menu_factory=self._profile_menu,
+        )
+        self._menu_buttons = [row._switch_btn for row in self.table.rows.values()]
+        self._set_actions_enabled(not self._login_busy)
+
+    def _profile_menu(self, alias: str, button: QToolButton) -> QMenu:
+        menu = QMenu(button)
         for title, handler in (
+            ("Sign in", self._login),
             ("Rename", self._rename),
             ("Bind account", self._bind),
             ("Remove", self._remove),
@@ -83,62 +212,19 @@ class AccountsView(BaseView):
             if title == "Remove":
                 menu.addSeparator()
             action = menu.addAction(tr(title))
-            action.triggered.connect(handler)
-            self._profile_actions.append(action)
-        self.more.setMenu(menu)
-        actions.addWidget(sign_in)
-        actions.addWidget(self.more)
-        self._root.insertWidget(2, self.action_bar)
-        self.table.itemSelectionChanged.connect(self._selection_changed)
-        self._selection_changed()
+            action.triggered.connect(
+                lambda _checked=False, account=alias, command=handler: command(account)
+            )
+        return menu
 
-    def refresh(self) -> None:
-        if not self._loaded:
-            self.operation_status.setText(tr("Loading saved accounts…"))
-        self.runner.submit(self.accounts.list_profiles(), self._render, self._load_failed)
-
-    def _load_failed(self, error: Exception) -> None:
-        self.operation_status.setText(tr("Could not load accounts: {error}", error=error))
-
-    def _render(self, profiles) -> None:
-        self._loaded = True
-        if self.operation_status.text() == tr("Loading saved accounts…"):
-            self.operation_status.clear()
-        selected = self._selected_alias()
-        self.guide.setVisible(not profiles)
-        with QSignalBlocker(self.table):
-            self.table.setRowCount(0)
-            self.table.setRowCount(len(profiles))
-            for row, profile in enumerate(profiles):
-                self.table.setItem(row, 0, QTableWidgetItem(profile.alias))
-                self.table.setItem(
-                    row,
-                    1,
-                    QTableWidgetItem(
-                        tr("Account linked") if profile.bound_account_id else tr("Sign-in required")
-                    ),
-                )
-                if profile.alias == selected:
-                    self.table.selectRow(row)
-        self._selection_changed()
-
-    def _selection_changed(self) -> None:
-        alias = self._selected_alias()
-        self.selection_label.setText(alias or tr("Select an account"))
-        self.more.setEnabled(not self._login_busy and alias is not None)
-        for button in self._profile_actions:
-            button.setEnabled(not self._login_busy and alias is not None)
-
-    def _selected_alias(self) -> str | None:
-        if not self.table.selectedItems():
-            return None
-        row = self.table.currentRow()
-        if row < 0:
-            return None
-        item = self.table.item(row, 0)
-        return item.text() if item else None
+    def _set_actions_enabled(self, enabled: bool) -> None:
+        self.add_button.setEnabled(enabled)
+        for button in self._menu_buttons:
+            button.setEnabled(enabled)
 
     def _add(self) -> None:
+        if self._login_busy:
+            return
         alias = prompt_text(
             self,
             tr("Add profile"),
@@ -148,16 +234,24 @@ class AccountsView(BaseView):
             action="Add account",
         )
         if alias:
-            self.runner.submit(self.accounts.create_profile(alias), lambda _: self.refresh())
-
-    def _login(self) -> None:
-        alias = self._selected_alias()
-        if alias and not self._login_busy:
             self._login_busy = True
-            self._selection_changed()
+            self._set_actions_enabled(False)
+            self.runner.submit(
+                self.accounts.create_profile(alias), self._created, self._login_failed
+            )
+
+    def _created(self, profile) -> None:
+        self._login_busy = False
+        self._login(profile.alias)
+
+    def _login(self, alias: str) -> None:
+        if not self._login_busy:
+            self._login_busy = True
+            self._set_actions_enabled(False)
             self.operation_status.setText(
                 tr("Waiting for Codex sign-in… Complete the sign-in flow in the window that opens.")
             )
+            self.operation_status.show()
             self.runner.submit(
                 self.accounts.login_profile(alias), self._login_done, self._login_failed
             )
@@ -167,29 +261,30 @@ class AccountsView(BaseView):
         self.operation_status.setText(
             tr("Sign-in complete. Your account is linked. Refresh usage in Overview.")
         )
-        self._selection_changed()
+        self.operation_status.show()
+        self._set_actions_enabled(True)
         self.refresh()
 
     def _login_failed(self, error: Exception) -> None:
         self._login_busy = False
         self.operation_status.setText(
-            tr("Sign-in could not be completed. Select the account and try again.")
+            tr("Sign-in could not be completed. Open the account menu and try again.")
         )
-        self._selection_changed()
+        self.operation_status.show()
+        self._set_actions_enabled(True)
         QMessageBox.warning(self, tr("Operation failed"), tr(str(error)))
+        self.refresh()
 
-    def _bind(self) -> None:
-        alias = self._selected_alias()
-        if alias:
+    def _bind(self, alias: str) -> None:
+        if not self._login_busy:
             self.runner.submit(
                 self.accounts.bind_current_account(alias),
                 lambda _: self.refresh(),
                 lambda e: QMessageBox.warning(self, tr("Bind failed"), str(e)),
             )
 
-    def _rename(self) -> None:
-        alias = self._selected_alias()
-        if not alias:
+    def _rename(self, alias: str) -> None:
+        if self._login_busy:
             return
         new = prompt_text(
             self,
@@ -203,9 +298,8 @@ class AccountsView(BaseView):
         if new and new != alias:
             self.runner.submit(self.accounts.rename_profile(alias, new), lambda _: self.refresh())
 
-    def _remove(self) -> None:
-        alias = self._selected_alias()
-        if not alias:
+    def _remove(self, alias: str) -> None:
+        if self._login_busy:
             return
         if (
             QMessageBox.question(

@@ -25,7 +25,6 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-# Profiles
 class ProfileRepository:
     async def list(self) -> list[Profile]:
         async with connect() as db:
@@ -96,7 +95,6 @@ class ProfileRepository:
         )
 
 
-# Threads
 class ThreadRepository:
     _upsert = """
         INSERT INTO threads (id, profile_id, workspace, cwd, preview, last_turn_id,
@@ -178,7 +176,6 @@ class ThreadRepository:
         return [self._row(row) for row in rows]
 
 
-# Goals
 class GoalRepository:
     async def upsert(self, goal: GoalCheckpoint) -> None:
         async with connect() as db:
@@ -265,7 +262,6 @@ class GoalRepository:
         )
 
 
-# Handoffs + events
 class HandoffRepository:
     async def save(self, handoff: HandoffRecord) -> None:
         async with connect() as db:
@@ -328,6 +324,20 @@ class HandoffRepository:
 
 
 class EventRepository:
+    HISTORY_LIMIT = 10_000
+
+    async def continuation_history(self, thread_id: str) -> list[dict]:
+        async with connect() as db:
+            rows = await (
+                await db.execute(
+                    """SELECT payload, created_at FROM events
+                    WHERE topic='continuation.status' AND thread_id=?
+                    ORDER BY id DESC LIMIT 20""",
+                    (thread_id,),
+                )
+            ).fetchall()
+        return [{"payload": json.loads(payload), "at": at} for payload, at in rows]
+
     async def append(
         self,
         topic: str,
@@ -349,6 +359,12 @@ class EventRepository:
                     json.dumps(redact(payload or {}), ensure_ascii=False),
                     _now_iso(),
                 ),
+            )
+            await db.execute(
+                """DELETE FROM events WHERE id <= (
+                    SELECT id FROM events ORDER BY id DESC LIMIT 1 OFFSET ?
+                )""",
+                (self.HISTORY_LIMIT,),
             )
             await db.commit()
 
@@ -380,14 +396,17 @@ class SettingsRepository:
         return row[0] if row else default
 
     async def set(self, key: str, value: str) -> None:
+        await self.set_many({key: value})
+
+    async def set_many(self, values: dict[str, str]) -> None:
         async with connect() as db:
-            await db.execute(
+            await db.executemany(
                 """
                 INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
                 ON CONFLICT(key) DO UPDATE SET value = excluded.value,
                     updated_at = excluded.updated_at
                 """,
-                (key, value, _now_iso()),
+                [(key, value, _now_iso()) for key, value in values.items()],
             )
             await db.commit()
 

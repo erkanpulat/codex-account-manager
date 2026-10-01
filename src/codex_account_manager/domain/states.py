@@ -1,4 +1,4 @@
-"""State enumerations for Codex Account Manager."""
+"""State enumerations for QuotaCrew."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ class QuotaState(StrEnum):
 
 
 class GoalState(StrEnum):
-    """Account Manager's view of a goal's lifecycle."""
+    """QuotaCrew's view of a goal's lifecycle."""
 
     IDLE = "idle"
     ACTIVE = "active"
@@ -28,7 +28,7 @@ class GoalState(StrEnum):
     NEEDS_USER = "needs_user"
 
 
-#: Terminal goal states — Account Manager must not auto-continue past these.
+#: Terminal goal states — QuotaCrew must not auto-continue past these.
 TERMINAL_GOAL_STATES = frozenset({GoalState.COMPLETE, GoalState.FAILED})
 #: States that require a human before any automation proceeds.
 USER_BLOCKING_GOAL_STATES = frozenset({GoalState.BLOCKED, GoalState.NEEDS_USER})
@@ -52,7 +52,7 @@ class TransactionStage(StrEnum):
 
 
 class SwitchPolicyKind(StrEnum):
-    """How Account Manager is allowed to initiate account switches."""
+    """How QuotaCrew is allowed to initiate account switches."""
 
     MANUAL = "manual"
     CONFIRM = "confirm"

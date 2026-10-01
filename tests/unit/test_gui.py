@@ -6,6 +6,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
+from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
 from PySide6.QtWidgets import QApplication
 from scripts.render_preview import PreviewRunner, sample_profiles
 
@@ -29,35 +30,349 @@ def window(app):
     yield window
     window.dispose()
     window.close()
+    window.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
 
 
 def test_all_screens_and_theme_switches(window, app):
     for dark in (True, False):
         window._apply_theme(dark)
-        for row in range(7):
+        for row in range(len(window._views)):
             window.nav.setCurrentRow(row)
             app.processEvents()
             assert window.stack.currentIndex() == row
     assert window.dashboard.palette_ == window.settings.palette_
+    window.dashboard._filter()
+    assert window.dashboard.account_table.palette_ == window.dashboard.palette_
+
+
+@pytest.mark.parametrize(
+    "setting,scope", [("ide_continue", "ide"), ("auto_continue", None), ("monitoring", None)]
+)
+def test_continuation_stop_setting_preserves_its_scope(window, monkeypatch, setting, scope):
+    from codex_account_manager.core.events import bus
+
+    events = []
+
+    def saved(coro, on_result=None, on_error=None):
+        coro.close()
+        if on_result:
+            on_result(None)
+
+    monkeypatch.setattr(window.settings.runner, "submit", saved)
+    unsubscribe = bus.subscribe("continuation.stop", lambda event: events.append(event.payload))
+    try:
+        getattr(window.settings, "_save_" + setting)(False)
+    finally:
+        unsubscribe()
+    assert events == ([{"scope": scope}] if scope else [{}])
+
+
+def test_installation_blocks_close_until_safe_handoff(window, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *_: None)
+    window.settings.cli.installing = True
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted()
+    window.settings.cli.installing = False
+    window.updates.preparing = True
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert not event.isAccepted()
+    window.updates._failed(RuntimeError("test failure"))
+    assert not window._installation_in_progress()
+
+
+def test_tour_visits_pages_and_restores_previous_selection(window):
+    from codex_account_manager.gui.onboarding import ProductTour
+
+    window.nav.setCurrentRow(1)
+    tour = ProductTour(window)
+    for index, (page, _, _) in enumerate(tour.STEPS):
+        assert window.stack.currentIndex() == page
+        assert tour.index == index
+        tour._advance()
+    assert window.stack.currentIndex() == 1
+
+
+def test_support_buttons_open_only_public_project_links(window, monkeypatch):
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QPushButton
+
+    from codex_account_manager.gui.about import AboutView
+    from codex_account_manager.gui.i18n import tr
+
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toString()))
+    view = window.findChild(AboutView)
+    for title in (
+        "Star on GitHub",
+        "Report an issue",
+        "Contribute a pull request",
+        "Developer profile",
+    ):
+        next(
+            button for button in view.findChildren(QPushButton) if button.text() == tr(title)
+        ).click()
+    assert opened == [
+        "https://github.com/erkanpulat/codex-quotacrew",
+        "https://github.com/erkanpulat/codex-quotacrew/issues",
+        "https://github.com/erkanpulat/codex-quotacrew/pulls",
+        "https://github.com/erkanpulat",
+    ]
 
 
 def test_filter_and_empty_state(window):
     window.dashboard.search.setText("studio")
-    assert set(window.dashboard._cards) == {"Studio"}
+    assert set(window.dashboard._account_rows) == {"Studio"}
     window.dashboard.search.setText("no match")
-    assert not window.dashboard._cards
+    assert not window.dashboard._account_rows
     window.dashboard._render([])
     assert "0 accounts" in window.dashboard.summary.text()
 
 
+def test_update_availability_opens_shared_settings_tab(window, monkeypatch):
+    from codex_account_manager import updates
+    from tests.unit.test_updates import metadata
+
+    monkeypatch.setattr(updates, "installed_directory", lambda: None)
+    panel = window.updates
+    panel._checked(updates.parse_release(metadata()))
+    assert not window.update_button.isHidden()
+    assert "2.0.0" in window.update_button.text()
+    window.update_button.click()
+    assert window.stack.currentIndex() == 6
+    assert window.settings.tabs.currentWidget() is panel
+    panel._checked(None)
+    assert window.update_button.isHidden() and panel.install.isHidden()
+
+
+def test_update_errors_restore_controls_and_shutdown_plan_blocks_install(window, monkeypatch):
+    from unittest.mock import Mock
+
+    from codex_account_manager import updates
+    from tests.unit.test_updates import metadata
+
+    monkeypatch.setattr(
+        updates, "installed_directory", lambda: __import__("pathlib").Path("C:/app")
+    )
+    panel = window.updates
+    panel._checked(updates.parse_release(metadata()))
+    panel._working(True)
+    panel._failed(RuntimeError("offline"))
+    assert panel.progress.isHidden() and panel.check.isEnabled() and panel.install.isEnabled()
+    submit = Mock()
+    monkeypatch.setattr(panel.runner, "submit", submit)
+    window._power_active = True
+    panel._update()
+    submit.assert_not_called()
+    assert "shutdown" in panel.status.text()
+
+
+def test_loading_waits_for_both_job_lists_and_clears_on_error(window):
+    view = window.conversations
+    view._render_threads([])
+    view._render_tracking(([], {}))
+    view.refresh()
+    assert not view.loading.isHidden()
+    view._render_tracking(([], {}))
+    assert not view.loading.isHidden()
+    view._sync_failed(RuntimeError("offline"))
+    assert view.loading.isHidden()
+    assert view.sync.isEnabled()
+
+
+def test_account_refresh_keeps_rows_and_clears_loading_on_failure(window):
+    view = window.accounts_view
+    view._render(sample_profiles())
+    aliases = set(view.table.rows)
+    view.refresh()
+    assert not view.loading.isHidden()
+    assert set(view.table.rows) == aliases
+    view._load_failed(RuntimeError("offline"))
+    assert view.loading.isHidden()
+    assert set(view.table.rows) == aliases
+    view.refresh()
+    view._render(sample_profiles())
+    assert view.loading.isHidden()
+
+
+def test_diagnostic_failure_clears_loading_and_allows_retry(window):
+    view = window.diagnostics
+    view.refresh()
+    assert not view.loading.isHidden()
+    assert not view.run_button.isEnabled()
+    view._failed(RuntimeError("offline"))
+    assert view.loading.isHidden()
+    assert view.run_button.isEnabled()
+    assert not view.status.isHidden()
+    view.refresh()
+    view._render([])
+    assert view.loading.isHidden()
+
+
 def test_active_account_cannot_be_switched(window):
-    assert not window.dashboard._cards["Personal"]._switch_btn.isEnabled()
-    assert window.dashboard._cards["Studio"]._switch_btn.isEnabled()
+    menu = window.dashboard._account_rows["Personal"]._switch_btn.menu()
+    assert "Switch account" not in [action.text() for action in menu.actions()]
+    assert "Refresh usage" in [action.text() for action in menu.actions()]
+    assert window.dashboard._account_rows["Studio"]._switch_btn.isEnabled()
 
 
-def test_profile_actions_disabled_without_selection(window):
-    assert all(not button.isEnabled() for button in window.accounts_view._profile_actions)
+def test_explicit_continuation_cancel_never_queues_work(window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    submitted = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(window.runner, "submit", lambda *args: submitted.append(args))
+    window.conversations._continue_verified("thread")
+    assert not submitted and not window.conversations._continue_busy
+
+
+def test_waiting_connection_notice_clears_after_confirmed_submission(window):
+    from codex_account_manager.core.events import bus
+
+    bus.publish("continuation.status", state="waiting_connection", stage="desktop")
+    assert not window.notice.isHidden()
+    assert "Nothing has been sent" in window.notice_text.text()
+    bus.publish("continuation.status", state="desktop_submitted", stage="execution")
+    assert window.notice.isHidden()
+
+
+def test_successful_work_does_not_hide_another_conversations_failure(window):
+    from codex_account_manager.core.events import bus
+
+    bus.publish("continuation.status", thread_id="ide", state="needs_user", stage="ide")
+    bus.publish(
+        "continuation.status", thread_id="desktop", state="desktop_submitted", stage="execution"
+    )
+    assert not window.notice.isHidden()
+    assert "IDE" in window.notice_text.text()
+    bus.publish("continuation.status", thread_id="ide", state="ide_submitted", stage="execution")
+    assert window.notice.isHidden()
+
+
+def test_completed_switch_clears_only_shared_dependency_not_other_errors(window):
+    from codex_account_manager.core.events import bus
+
+    bus.publish(
+        "continuation.status", thread_id="desktop", state="waiting_shared", stage="desktop_restart"
+    )
+    bus.publish("continuation.status", thread_id="ide", state="needs_user", stage="ide")
+    bus.publish("switch.completed", target="example")
+    assert not window.notice.isHidden()
+    assert "IDE" in window.notice_text.text()
+    assert set(window._continuation_issues) == {"ide"}
+    bus.publish("continuation.status", thread_id="ide", state="completed", stage="execution")
+    assert window.notice.isHidden()
+
+
+def test_turkish_account_status_preserves_dotted_and_dotless_letters(window):
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QLabel
+
+    from codex_account_manager.gui.i18n import set_language
+    from codex_account_manager.gui.widgets import AccountRow, account_status
+
+    set_language("tr")
+    try:
+        health = sample_profiles()[1]
+        assert account_status(health)[0] == "Kullanılabilir"
+        assert account_status(replace(health, is_active=True))[0] == "Etkin"
+        assert account_status(replace(health, stale=True))[0] == "Güncel değil"
+        assert account_status(replace(health, auth_present=False))[0] == "Giriş gerekli"
+        row = AccountRow(health, window.dashboard.palette_)
+        assert "Kullanılabilir" in [label.text() for label in row.findChildren(QLabel)]
+        row.deleteLater()
+    finally:
+        set_language("en")
+
+
+def test_account_creation_starts_login_and_blocks_duplicate_adds(window, monkeypatch):
+    from types import SimpleNamespace
+
+    from codex_account_manager.gui import accounts as module
+
+    submissions = []
+
+    def submit(coro, on_result=None, on_error=None):
+        submissions.append((coro.cr_code.co_name, on_result, on_error))
+        coro.close()
+
+    monkeypatch.setattr(module, "prompt_text", lambda *_args, **_kwargs: "New account")
+    monkeypatch.setattr(window.runner, "submit", submit)
+    view = window.accounts_view
+    view._add()
+    assert submissions[0][0] == "create_profile"
+    assert not view.add_button.isEnabled()
+    view._add()
+    assert len(submissions) == 1
+    submissions[0][1](SimpleNamespace(alias="New account"))
+    assert submissions[1][0] == "login_profile"
+    assert view._login_busy and not view.add_button.isEnabled()
+
+
+def test_continuation_badges_and_tray_follow_loaded_settings(window):
+    window.settings._loaded(
+        {"auto_continue": "true", "ide_continue": "true", "monitor_enabled": "true"}
+    )
+    assert window.tray_auto.isChecked() and window.tray_ide.isChecked()
+    assert not window.ide_badge.isHidden() and "Enabled" in window.ide_badge.text()
+    window._work_changed(3, 2)
+    assert "3 running" in window.tray_work.text()
+    assert "3 running" in window.work_badge.text()
+    window._monitoring_changed(False)
+    assert "Paused" in window.ide_badge.text()
+    assert window._running_work == 3
+
+
+@pytest.mark.parametrize("page", [0, 1, 2, 3])
+def test_account_and_job_tables_use_remaining_height(window, app, page):
+    window.resize(1180, 760)
+    window.accounts_view._render(sample_profiles())
+    window.nav.setCurrentRow(page)
+    window.show()
+    app.processEvents()
+    view = window._views[page]
+    if page == 0:
+        panel = view.accounts_panel
+    elif page == 2:
+        panel = view.tabs
+    else:
+        panel = view.table.parentWidget()
+    assert view.height() - panel.geometry().bottom() <= 20
+
+
+def test_startup_select_updates_and_restores_verified_state(window, monkeypatch):
+    from codex_account_manager.platform import startup
+
+    submissions = []
+
+    def submit(coro, on_result=None, on_error=None):
+        submissions.append(on_result)
+        coro.close()
+
+    monkeypatch.setattr(window.runner, "submit", submit)
+    monkeypatch.setattr(startup, "enable_start_with_windows", lambda _command: True)
+    settings = window.settings
+    settings._startup_loaded(False)
+    assert settings.startup.currentData() is False
+    settings.startup.setCurrentIndex(settings.startup.findData(True))
+    assert not settings.startup.isEnabled() and len(submissions) == 1
+    settings._startup_loaded(False)
+    assert settings.startup.currentData() is False and settings.startup.isEnabled()
+
+
+def test_account_rows_have_their_own_menu_without_selection(window):
+    view = window.accounts_view
+    view._render(sample_profiles())
+    assert not hasattr(view, "action_bar")
+    assert len(view.table.rows) == 4
+    assert all(row._switch_btn.menu() is not None for row in view.table.rows.values())
 
 
 def test_async_callbacks_run_on_gui_thread_and_errors_are_visible(app):
@@ -93,12 +408,13 @@ def test_turkish_navigation_and_settings_use_stable_ids(app):
     window = MainWindow(PreviewRunner())
     try:
         assert window.nav.item(0).text().strip() == "Genel Bakış"
-        assert window.nav.item(6).text().strip() == "Hakkında"
+        assert window.nav.item(7).text().strip() == "Yardım"
         assert window.settings.policy.itemData(0) == "manual"
         assert window.settings.policy.itemData(2) == "availability_failover"
         window.settings._loaded({"switch_policy": "confirm", "theme": "light"})
         assert window.settings.policy.currentData() == "confirm"
-        assert "Onaylı mod" in window.dashboard.mode_label.text()
+        assert "Geçiş yapmadan önce sor" in window.dashboard.mode_label.text()
+        assert "Onaylı mod" in window.dashboard.mode_label.toolTip()
         assert window.settings.theme.currentData() == "light"
         window.dashboard._render([])
         assert window.dashboard.summary.isHidden()
@@ -182,7 +498,7 @@ def test_tracked_work_explains_turn_and_goal_without_storing_objective(window):
     )
     assert view.tracked_table.rowCount() == 1
     assert view.tracked_table.item(0, 1).text() == "Work"
-    assert view.tracked_table.item(0, 2).text() == "Limit reached"
+    assert view.tracked_table.item(0, 2).data(Qt.ItemDataRole.UserRole + 2) == "Limit reached"
     assert "usage" in view.tracked_table.item(0, 3).text().lower()
     assert view.tracked_empty.isHidden()
     view.tracked_table.selectRow(0)
@@ -209,8 +525,8 @@ def test_settings_defaults_and_minimal_navigation(window):
     assert window.settings.auto_continue.isChecked()
     assert window.settings.interval.minimum() == 30
     assert window.settings.interval.maximum() == 3600
-    assert window.nav.item(3).isHidden()
     assert window.nav.item(4).isHidden()
+    assert window.nav.item(5).isHidden()
     window._open_tool(4)
     assert window.stack.currentIndex() == 4
 
@@ -222,13 +538,13 @@ def test_small_window_and_keyboard_search(window, app):
     assert window.width() == 1180 and window.height() == 760
     window._focus_search()
     assert window.focusWidget() is window.dashboard.search
-    window.nav.setCurrentRow(5)
+    window.nav.setCurrentRow(6)
     app.processEvents()
-    assert window.settings.interval.isVisible()
-    window._open_tool(3)
+    assert window.settings.monitoring.isVisible()
+    window._open_tool(4)
     assert not window.back_to_settings.isHidden()
     window.back_to_settings.click()
-    assert window.stack.currentIndex() == 5
+    assert window.stack.currentIndex() == 6
 
 
 def test_refresh_preserves_selected_conversation_and_column_width(window):
@@ -318,9 +634,8 @@ def test_login_error_is_translated_and_allows_retry(window, monkeypatch):
     from codex_account_manager.domain.models import Profile
 
     view._render([Profile(alias="test", codex_home="unused")])
-    view.table.selectRow(0)
     view._login_busy = True
-    view._selection_changed()
+    view._set_actions_enabled(False)
     messages = []
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: messages.append(args[2]))
     try:
@@ -332,7 +647,7 @@ def test_login_error_is_translated_and_allows_retry(window, monkeypatch):
         )
         assert "Ayarlar > Sistem Kontrolü" in messages[0]
         assert not view._login_busy
-        assert all(button.isEnabled() for button in view._profile_actions)
+        assert all(button.isEnabled() for button in view._menu_buttons)
     finally:
         set_language("en")
 
@@ -349,11 +664,35 @@ def test_automatic_continuation_setting_and_status_are_visible(window):
         assert "otomatik devam" in window.statusBar().currentMessage()
         window._domain_event(Event("continuation.status", {"state": "needs_user"}))
         assert "müdahaleniz gerekiyor" in window.statusBar().currentMessage()
+        assert not window.notice.isHidden()
+        assert window.notice_text.text() == window.statusBar().currentMessage()
     finally:
         set_language("en")
 
 
-def test_account_menu_rename_preserves_selection_and_locks_during_login(window, monkeypatch):
+def test_sidebar_tools_remain_selected_across_theme_and_nested_pages(window):
+    for dark in (True, False):
+        for page, active in ((6, 6), (5, 6), (4, 6), (7, 7), (8, 8), (0, None)):
+            window._on_nav(page)
+            window._apply_theme(dark)
+            assert [
+                key for key, (button, _) in window.sidebar_actions.items() if button.isChecked()
+            ] == ([active] if active is not None else [])
+
+
+def test_empty_table_message_tracks_data_changes(window, app):
+    window.nav.setCurrentRow(5)
+    window.show()
+    app.processEvents()
+    table = window.diagnostics.table
+    assert table.empty.isVisibleTo(window)
+    table.setRowCount(1)
+    assert table.empty.isHidden()
+    table.setRowCount(0)
+    assert table.empty.isVisibleTo(window)
+
+
+def test_account_row_menu_targets_alias_after_sort_and_locks_during_login(window, monkeypatch):
     from unittest.mock import AsyncMock
 
     from codex_account_manager.domain.models import Profile
@@ -362,28 +701,32 @@ def test_account_menu_rename_preserves_selection_and_locks_during_login(window, 
     view = window.accounts_view
     profiles = [Profile(alias=name, codex_home="unused") for name in ("First", "Second")]
     view._render(profiles)
-    view.table.selectRow(1)
+    assert not view.filters_host.isHidden()
     view._render(list(reversed(profiles)))
-    assert view._selected_alias() == "Second"
-    assert view.selection_label.text() == "Second"
+    button = view.table.rows["Second"]._switch_btn
+    assert button is not None
     rename = AsyncMock()
     monkeypatch.setattr(view.accounts, "rename_profile", rename)
     monkeypatch.setattr(
         "codex_account_manager.gui.accounts.prompt_text", lambda *args, **kwargs: "Renamed"
     )
-    action = next(action for action in view.more.menu().actions() if action.text() == tr("Rename"))
+    action = next(action for action in button.menu().actions() if action.text() == tr("Rename"))
     action.trigger()
     rename.assert_called_once_with("Second", "Renamed")
-    view._login_busy = True
-    view._selection_changed()
-    assert not view.more.isEnabled()
-    assert all(not action.isEnabled() for action in view._profile_actions)
+    assert list(view.table.rows) == ["First", "Second"]
+    login = AsyncMock()
+    monkeypatch.setattr(view.accounts, "login_profile", login)
+    sign_in = next(action for action in button.menu().actions() if action.text() == tr("Sign in"))
+    sign_in.trigger()
+    login.assert_called_once_with("Second")
+    assert all(not button.isEnabled() for button in view._menu_buttons)
     view._login_busy = False
-    view.table.clearSelection()
-    assert view._selected_alias() is None
-    assert all(not action.isEnabled() for action in view._profile_actions)
+    view._set_actions_enabled(True)
+    assert all(button.isEnabled() for button in view._menu_buttons)
     view._render([])
     assert not view.guide.isHidden()
+    assert view.filters_host.isHidden()
+    assert view.table.isHidden()
 
 
 def test_conversation_menu_actions_and_optional_details(window, monkeypatch):
@@ -428,7 +771,6 @@ def test_conversation_menu_actions_and_optional_details(window, monkeypatch):
 @pytest.mark.parametrize("dark", [True, False])
 def test_settings_controls_fit_minimum_window_and_remain_reachable(app, locale, dark):
     from PySide6.QtCore import QPoint
-    from PySide6.QtWidgets import QScrollArea
 
     from codex_account_manager.gui.i18n import set_language
 
@@ -436,27 +778,46 @@ def test_settings_controls_fit_minimum_window_and_remain_reachable(app, locale, 
     window = MainWindow(PreviewRunner())
     try:
         window.resize(1040, 700)
-        window.nav.setCurrentRow(5)
+        window.nav.setCurrentRow(6)
         window.settings._loaded({"theme": "dark" if dark else "light"})
         window.show()
         app.processEvents()
         assert window.size().width() == 1040 and window.size().height() == 700
-        scroll = window.settings.findChild(QScrollArea)
+
+        window.settings.tabs.setCurrentIndex(0)
+        app.processEvents()
+        scroll = window.settings.tabs.currentWidget()
         assert scroll.horizontalScrollBar().maximum() == 0
         for control in (
+            window.settings.monitoring,
             window.settings.policy,
-            window.settings.auto_continue,
-            window.settings.interval,
+            window.settings.background,
             window.settings.theme,
             window.settings.language,
             window.settings.startup,
         ):
-            scroll.ensureWidgetVisible(control)
+            scroll.ensureWidgetVisible(control.parentWidget())
             app.processEvents()
             top_left = control.mapTo(scroll.viewport(), QPoint(0, 0))
             bottom_right = control.mapTo(scroll.viewport(), control.rect().bottomRight())
             assert scroll.viewport().rect().contains(top_left)
-            assert scroll.viewport().rect().contains(bottom_right)
+            assert bottom_right.y() <= scroll.viewport().rect().bottom() + 2
+
+        window.settings.tabs.setCurrentIndex(1)
+        app.processEvents()
+        scroll2 = window.settings.tabs.currentWidget()
+        for control in (
+            window.settings.ide_continue,
+            window.settings.ide_refresh,
+            window.settings.auto_continue,
+            window.settings.interval,
+        ):
+            scroll2.ensureWidgetVisible(control.parentWidget())
+            app.processEvents()
+            top_left = control.mapTo(scroll2.viewport(), QPoint(0, 0))
+            bottom_right = control.mapTo(scroll2.viewport(), control.rect().bottomRight())
+            assert scroll2.viewport().rect().contains(top_left)
+            assert bottom_right.y() <= scroll2.viewport().rect().bottom() + 2
     finally:
         window.dispose()
         window.close()
@@ -474,7 +835,7 @@ def test_initial_account_loading_is_distinct_from_empty_and_failed(app):
         view = window.dashboard
 
         def labels():
-            return [item.text() for item in view._grid_host.findChildren(QLabel)]
+            return [item.text() for item in view.account_table._host.findChildren(QLabel)]
 
         assert not view._loaded
         assert tr("Loading accounts…") in labels()
@@ -512,6 +873,8 @@ def test_desktop_open_uses_native_link_and_reports_handler_failure(window, monke
 
 
 def test_tracking_selection_follows_identity_after_refresh(window):
+    from PySide6.QtCore import Qt
+
     from codex_account_manager.continuity.tracking import ObservedWork
 
     view = window.conversations
@@ -520,7 +883,10 @@ def test_tracking_selection_follows_identity_after_refresh(window):
     view._render_tracking(([first, second], {}))
     view.tracked_table.selectRow(0)
     view._render_tracking(([second, first], {}))
-    assert view.tracked_table.currentRow() == 1
+    assert (
+        view.tracked_table.item(view.tracked_table.currentRow(), 0).data(Qt.ItemDataRole.UserRole)
+        == "first"
+    )
     assert view.tracked_open.isEnabled()
     view._render_tracking(([second], {}))
     assert not view.tracked_table.selectedItems()
@@ -564,11 +930,11 @@ def test_tray_restores_hidden_minimized_window(window, app, reason):
 def test_reset_credit_details_are_plain_text_and_separate_from_renewals(app, monkeypatch):
     from dataclasses import replace
 
-    from PySide6.QtWidgets import QDialog, QLabel, QPlainTextEdit, QPushButton
+    from PySide6.QtWidgets import QDialog, QLabel, QPushButton
 
     from codex_account_manager.domain.models import ResetCredit, ResetCredits
     from codex_account_manager.gui.i18n import set_language
-    from codex_account_manager.gui.widgets import AccountCard
+    from codex_account_manager.gui.widgets import AccountRow
 
     set_language("en")
     health = replace(
@@ -587,20 +953,831 @@ def test_reset_credit_details_are_plain_text_and_separate_from_renewals(app, mon
             ),
         ),
     )
-    card = AccountCard(health)
-    displayed = []
-    monkeypatch.setattr(
-        QDialog,
-        "exec",
-        lambda dialog: displayed.append(dialog.findChild(QPlainTextEdit).toPlainText()),
-    )
+    card = AccountRow(health)
+    displayed_labels = []
+
+    def _capture_dialog(dialog):
+        # Collect all QLabel texts from the card-layout dialog
+        displayed_labels.extend(lbl.text() for lbl in dialog.findChildren(QLabel))
+
+    monkeypatch.setattr(QDialog, "exec", _capture_dialog)
+    # Button text is now "2 reset credits" (count-based) or "View reset credits"
     button = next(
-        b for b in card.findChildren(QPushButton) if b.text().startswith("Reset credits:")
+        b
+        for b in card.findChildren(QPushButton)
+        if "reset credit" in b.text().lower() or "view reset" in b.text().lower()
     )
     button.click()
-    assert "2 available" in displayed[0]
-    assert "<b>Untrusted title</b>" in displayed[0]
-    assert "No expiry" in displayed[0]
-    assert "only some credits" in displayed[0]
-    assert any("Scheduled renewals" in label.text() for label in card.findChildren(QLabel))
+    all_text = " ".join(displayed_labels)
+    assert "2" in all_text  # available count shown in header
+    assert "No expiry" in all_text
+    assert "only some credits" in all_text
+    assert sum(label.toolTip().startswith("Renews ") for label in card.findChildren(QLabel)) == 2
     card.close()
+
+
+def test_support_probe_drops_stale_results_and_prevents_duplicate_requests(window):
+    from codex_account_manager.domain.models import ThreadRecord
+
+    view = window.conversations
+    view._render_threads([ThreadRecord(id="a", title="A"), ThreadRecord(id="b", title="B")])
+    view.table.selectRow(0)
+    calls = []
+
+    def submit(coro, on_result=None, on_error=None):
+        coro.close()
+        calls.append(on_result)
+
+    view.runner.submit = submit
+    try:
+        view._check_support()
+        view._check_support()
+        assert len(calls) == 1
+        view.table.selectRow(1)
+        calls[0]("desktop")
+        assert "can read this conversation" not in view.support_status.text()
+        view._check_support()
+        assert len(calls) == 2
+        calls[1]("unverified")
+        assert "No message was sent" in view.support_status.text()
+        assert not view._support_busy
+    finally:
+        view.runner.submit = PreviewRunner().submit
+
+
+def test_account_filters_combine_with_search_without_turning_unknown_into_ready(window):
+    view = window.dashboard
+    view.account_filter.setCurrentIndex(view.account_filter.findData("credits"))
+    assert set(view._account_rows) == {"Personal"}
+    view.search.setText("studio")
+    assert not view._account_rows
+    view.search.clear()
+    view.account_filter.setCurrentIndex(view.account_filter.findData("attention"))
+    assert set(view._account_rows) == {"Client workspace"}
+    view.account_filter.setCurrentIndex(view.account_filter.findData("ready"))
+    assert "Client workspace" not in view._account_rows
+    view.account_filter.setCurrentIndex(view.account_filter.findData("all"))
+    assert len(view._account_rows) == 4
+
+
+def test_global_email_privacy_survives_refresh_and_hides_unverified_addresses(window):
+    from dataclasses import replace
+
+    health = replace(sample_profiles()[0], email="owner@example.test")
+    view = window.dashboard
+    view._render([health])
+    assert view._account_rows[health.alias]._email_button.toolTip() == health.email
+    view.email_toggle.click()
+    view._render([health])
+    card = view._account_rows[health.alias]
+    assert health.email not in card._email_button.text()
+    assert health.email not in card._email_button.toolTip()
+    view.email_toggle.click()
+    assert view._account_rows[health.alias]._email_button.toolTip() == health.email
+    view._render([replace(health, account_match=False)])
+    assert not hasattr(view._account_rows[health.alias], "_email_button")
+
+
+def test_stale_card_keeps_usage_but_cannot_switch(window):
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QLabel
+
+    from codex_account_manager.domain.states import QuotaState
+
+    health = replace(
+        sample_profiles()[1], stale=True, error="offline", quota_state=QuotaState.UNKNOWN
+    )
+    window.dashboard._render([health])
+    card = window.dashboard._account_rows[health.alias]
+    switch = next(
+        action for action in card._switch_btn.menu().actions() if action.text() == "Switch account"
+    )
+    assert not switch.isEnabled()
+    texts = [item.text() for item in card.findChildren(QLabel)]
+    assert "Stale" in texts
+    assert any("does not mean your sign-in is invalid" in text for text in texts)
+
+
+def test_new_install_starts_monitoring_and_preserves_explicit_pause(window):
+    window.settings._loaded({})
+    assert window.settings.monitoring.isChecked()
+    assert window.settings.theme.currentData() == "dark"
+    assert not window.settings.ide_continue.isChecked()
+    assert not window.settings.background.isChecked()
+    assert not window._keep_in_tray
+    assert not window.power_view.controls.timer.isActive()
+    assert window.power_view.controls.plan.target is None
+    assert "checked every" in window.dashboard.mode_detail.text().lower()
+    window.settings._loaded({"monitor_enabled": "false"})
+    assert not window.settings.monitoring.isChecked()
+    assert "paused" in window.dashboard.mode_detail.text().lower()
+
+
+def test_cancel_ignores_pending_power_check_result(window, monkeypatch):
+    from unittest.mock import Mock
+
+    from codex_account_manager.monitoring.power import PowerEvidence, PowerTarget
+    from codex_account_manager.platform import power
+
+    widget = window.power_view.controls
+    callbacks = []
+
+    def submit(coro, on_result=None, on_error=None):
+        coro.close()
+        callbacks.append(on_result)
+
+    widget.runner.submit = submit
+    shutdown = Mock()
+    monkeypatch.setattr(power, "shutdown_windows", shutdown)
+    widget.plan.arm(PowerTarget("limits"))
+    widget._tick()
+    assert len(callbacks) == 1
+    widget.cancel()
+    callbacks[0](PowerEvidence(True, "done", "a"))
+    assert widget.plan.target is None
+    assert not widget.timer.isActive()
+    shutdown.assert_not_called()
+
+
+def test_quit_cancels_shutdown_plan(window, monkeypatch):
+    from PySide6.QtGui import QCloseEvent
+
+    from codex_account_manager.monitoring.power import PowerTarget
+
+    window.power_view.controls.plan.arm(PowerTarget("limits"))
+    event = QCloseEvent()
+    window.closeEvent(event)
+    assert event.isAccepted()
+    assert window.power_view.controls.plan.target is None
+
+
+def test_shutdown_is_delivered_once_after_fresh_countdown(window, monkeypatch):
+    from unittest.mock import Mock
+
+    from codex_account_manager.gui import power as gui_power
+    from codex_account_manager.monitoring.power import PowerEvidence, PowerTarget
+    from codex_account_manager.platform import power
+
+    widget = window.power_view.controls
+    callbacks = []
+    clock = [0.0]
+    monkeypatch.setattr(gui_power.time, "monotonic", lambda: clock[0])
+    shutdown = Mock()
+    monkeypatch.setattr(power, "shutdown_windows", shutdown)
+
+    def submit(coro, on_result=None, on_error=None):
+        coro.close()
+        callbacks.append(on_result)
+
+    widget.runner.submit = submit
+    widget.plan.arm(PowerTarget("limits"))
+    for second in range(0, 121, 15):
+        clock[0] = float(second)
+        widget._tick()
+        callbacks.pop(0)(PowerEvidence(True, "done", "a"))
+    shutdown.assert_called_once()
+    assert widget.plan.target is None
+    assert not widget.timer.isActive()
+
+
+def test_shutdown_status_and_cancel_are_visible_in_tray(window):
+    from codex_account_manager.monitoring.power import PowerTarget
+
+    window.power_view.controls.plan.arm(PowerTarget("limits"))
+    normal_key = window.tray.icon().cacheKey()
+    window._power_status("Shutting down in 102s", True)
+    assert "102s" in window.tray.toolTip()
+    assert window.tray_cancel_power.isVisible() and window.tray_cancel_power.isEnabled()
+    assert "102s" in window.tray_power_detail.text()
+    assert window.tray.icon().cacheKey() != normal_key
+    assert not window.power_badge.isHidden()
+    pending_key = window.tray.icon().cacheKey()
+    window._power_status("Shutting down in 101s", True)
+    assert window.tray.icon().cacheKey() == pending_key
+    window.tray_cancel_power.trigger()
+    assert window.power_view.controls.plan.target is None
+    assert not window.tray_cancel_power.isVisible()
+    assert window.power_badge.isHidden()
+    assert "Shutting down" not in window.tray.toolTip()
+
+
+@pytest.mark.parametrize("language", ["en", "tr"])
+@pytest.mark.parametrize("dark", [True, False])
+def test_compact_account_rows_keep_quota_columns_aligned(app, language, dark):
+    from dataclasses import replace
+
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtWidgets import QLabel, QScrollArea
+
+    from codex_account_manager.gui.i18n import set_language
+
+    set_language(language)
+    window = MainWindow(PreviewRunner())
+    try:
+        window._apply_theme(dark)
+        profiles = sample_profiles()
+        profiles[1] = replace(profiles[1], alias="A very long account name " * 3)
+        window.dashboard._render(profiles)
+        window.resize(1040, 700)
+        window.show()
+        app.processEvents()
+        rows = list(window.dashboard._account_rows.values())
+        assert len({row._primary_usage.x() for row in rows}) == 1
+        assert len({row._secondary_usage.x() for row in rows}) == 1
+        assert all(
+            rows[index].geometry().bottom() < rows[index + 1].geometry().top()
+            for index in range(len(rows) - 1)
+        )
+        assert any(
+            area.verticalScrollBar().maximum() > 0
+            for area in window.dashboard.findChildren(QScrollArea)
+        )
+        for row in rows:
+            name = next(
+                item for item in row.findChildren(QLabel) if item.objectName() == "FieldTitle"
+            )
+            assert name.width() > 0
+            assert name.text() == row.alias
+            assert name.toolTip() == row.alias
+            assert name.textFormat() == Qt.TextFormat.PlainText
+            assert row._plan.isVisibleTo(window)
+            assert (
+                abs(
+                    row._plan.mapTo(row, QPoint()).x()
+                    - name.mapTo(row, QPoint()).x()
+                    - name.width()
+                    - 12
+                )
+                <= 1
+            )
+            status = next(
+                item
+                for item in row.findChildren(QLabel)
+                if item.objectName() == "Pill" and item.isVisibleTo(window)
+            )
+            assert (
+                abs(status.mapTo(row, status.rect().center()).y() - row.rect().center().y()) <= 12
+            )
+            assert row._switch_btn.isVisibleTo(window) or not row._switch_btn.isEnabled()
+            if row._switch_btn.isVisibleTo(window):
+                assert row._switch_btn.parentWidget().rect().contains(row._switch_btn.geometry())
+            assert row._primary_usage.width() >= 130
+        assert all(
+            area.horizontalScrollBar().maximum() == 0
+            for area in window.dashboard.findChildren(QScrollArea)
+        )
+        headings = [button for button, _title in window.dashboard._header_buttons.values()]
+        first = rows[0]
+        cells = [first._identity, *first._usage_cells, first._status_host]
+        for heading, cell in zip(headings, cells, strict=True):
+            assert (
+                abs(
+                    heading.mapTo(window.dashboard, QPoint()).x()
+                    - cell.mapTo(window.dashboard, QPoint()).x()
+                )
+                <= 2
+            )
+        window.resize(1600, 940)
+        app.processEvents()
+        assert (
+            window.dashboard.table_header.width()
+            == window.dashboard.accounts_scroll.viewport().width()
+        )
+        for heading, cell in zip(headings, cells, strict=True):
+            assert (
+                abs(
+                    heading.mapTo(window.dashboard, QPoint()).x()
+                    - cell.mapTo(window.dashboard, QPoint()).x()
+                )
+                <= 2
+            )
+    finally:
+        window.dispose()
+        window.close()
+        app.processEvents()
+        set_language("en")
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("active", ["Personal", "Client workspace", "Open source", "Studio"]),
+        ("name", ["Client workspace", "Open source", "Personal", "Studio"]),
+        ("five_most", ["Studio", "Personal", "Open source", "Client workspace"]),
+        ("five_least", ["Client workspace", "Open source", "Personal", "Studio"]),
+        ("weekly_most", ["Studio", "Open source", "Personal", "Client workspace"]),
+        ("weekly_least", ["Client workspace", "Personal", "Open source", "Studio"]),
+        ("credits", ["Personal", "Client workspace", "Studio", "Open source"]),
+    ],
+)
+def test_account_sorting_respects_selected_order_after_refresh(window, mode, expected):
+    view = window.dashboard
+    view.sort_order.setCurrentIndex(view.sort_order.findData(mode))
+    assert list(view._account_rows) == expected
+    view._render(sample_profiles())
+    assert list(view._account_rows) == expected
+    view.search.setText("studio")
+    assert list(view._account_rows) == ["Studio"]
+    view.search.clear()
+    assert list(view._account_rows) == expected
+
+
+def test_quota_sorting_uses_window_duration_and_places_unverified_last(window):
+    from dataclasses import replace
+
+    base = sample_profiles()[0]
+    swapped = replace(
+        base,
+        alias="Weekly first",
+        profile_id="swapped",
+        is_active=False,
+        primary_window_minutes=10080,
+        primary_used_percent=90,
+        secondary_window_minutes=300,
+        secondary_used_percent=1,
+    )
+    stale = replace(
+        base, alias="A stale account", profile_id="stale", stale=True, primary_used_percent=0
+    )
+    missing = replace(
+        base, alias="Unknown duration", profile_id="missing", primary_window_minutes=None
+    )
+    invalid = replace(
+        base, alias="Invalid usage", profile_id="invalid", primary_used_percent=float("nan")
+    )
+    view = window.dashboard
+    view._render([stale, missing, invalid, base, swapped])
+    view.sort_order.setCurrentIndex(view.sort_order.findData("five_most"))
+    assert list(view._account_rows) == [
+        "Weekly first",
+        "Personal",
+        "A stale account",
+        "Invalid usage",
+        "Unknown duration",
+    ]
+    view.sort_order.setCurrentIndex(view.sort_order.findData("weekly_most"))
+    assert list(view._account_rows)[-1] == "A stale account"
+    assert list(view._account_rows)[-2] == "Weekly first"
+
+
+def test_renewal_sorting_does_not_treat_expired_or_missing_time_as_fresh(window, monkeypatch):
+    from dataclasses import replace
+
+    monkeypatch.setattr("codex_account_manager.gui.overview.time.time", lambda: 1000)
+    base = sample_profiles()[0]
+    view = window.dashboard
+    view._render(
+        [
+            replace(base, alias="Expired", primary_resets_at=900, secondary_resets_at=None),
+            replace(base, alias="Later", primary_resets_at=2000, secondary_resets_at=3000),
+            replace(base, alias="Sooner", primary_resets_at=4000, secondary_resets_at=1200),
+            replace(base, alias="Unknown", primary_resets_at=None, secondary_resets_at=None),
+        ]
+    )
+    view.sort_order.setCurrentIndex(view.sort_order.findData("renewal"))
+    assert list(view._account_rows) == ["Sooner", "Later", "Expired", "Unknown"]
+
+
+def test_restored_sort_cannot_override_a_new_user_choice(window):
+    view = window.dashboard
+    view._restore_sort("weekly_most")
+    assert view.sort_order.currentData() == "weekly_most"
+    view.sort_order.setCurrentIndex(view.sort_order.findData("name"))
+    view._restore_sort("five_least")
+    assert view.sort_order.currentData() == "name"
+
+
+def test_header_sort_does_not_change_next_candidate(window):
+    view = window.dashboard
+    view._render(sample_profiles())
+    view.set_automation("availability_failover", True, 90)
+    assert not view._account_rows["Studio"]._candidate.isHidden()
+    view._sort_column(("five_most", "five_least"))
+    assert list(view._account_rows)[0] == "Studio"
+    view._sort_column(("five_most", "five_least"))
+    assert list(view._account_rows)[0] == "Client workspace"
+    assert not view._account_rows["Studio"]._candidate.isHidden()
+    view.set_automation("availability_failover", False, 90)
+    assert all(row._candidate.isHidden() for row in view._account_rows.values())
+
+
+def test_stale_candidate_and_unknown_windows_are_not_presented_as_capacity(window):
+    from dataclasses import replace
+
+    profiles = sample_profiles()
+    profiles[1] = replace(profiles[1], stale=True, error=None)
+    profiles[3] = replace(profiles[3], reauth_required=True)
+    view = window.dashboard
+    view._render(profiles)
+    view.set_automation("availability_failover", True, 60)
+    assert all(row._candidate.isHidden() for row in view._account_rows.values())
+    assert view._account_rows["Studio"]._primary_usage._value.text() == "—"
+    view._render([replace(profiles[0], primary_window_minutes=60)])
+    assert view._account_rows["Personal"]._primary_usage._value.text() == "—"
+
+
+def test_refresh_error_banner_clears_only_after_success(window):
+    view = window.dashboard
+    view._on_error(RuntimeError("offline"))
+    assert not view.alert.isHidden()
+    view._render(sample_profiles())
+    assert view.alert.isHidden()
+
+
+def test_nonmodal_feedback_keeps_errors_visible_and_success_ephemeral(window):
+    window._switch_failed(RuntimeError("offline"))
+    assert not window.notice.isHidden()
+    assert "offline" in window.notice_text.text()
+    window._switch_done("Private account alias")
+    assert window.notice.isHidden()
+    assert not window.toast.isHidden()
+    assert "Private account alias" not in window.toast.text()
+    assert window.toast_timer.isActive()
+    window.toast_timer.timeout.emit()
+    assert window.toast.isHidden()
+
+
+def test_jobs_filter_clears_actions_and_shutdown_uses_selected_identity(window):
+    from codex_account_manager.continuity.tracking import ObservedWork
+
+    view = window.conversations
+    jobs = [
+        ObservedWork("running", "account", "inProgress", "active", True, False, 1),
+        ObservedWork("done", "account", "completed", "complete", True, False, 2),
+    ]
+    view._render_tracking((jobs, {"account": "Example"}))
+    assert view.work_fields["account"].text() == "Example"
+    requested = []
+    view.shutdown_requested.connect(requested.append)
+    view._shutdown_tracked()
+    assert requested == ["running"]
+    view.work_filter.setCurrentIndex(view.work_filter.findData("completed"))
+    assert view.tracked_table.isRowHidden(0)
+    assert not view.tracked_open.isEnabled()
+    assert not view.work_more.isEnabled()
+    view._shutdown_tracked()
+    assert requested == ["running"]
+    view.tracked_table.selectRow(1)
+    assert view.work_fields["turn"].text() == "Completed"
+    view.work_search.setText("missing")
+    assert not view.tracked_open.isEnabled()
+
+
+def test_activity_excludes_raw_details_and_recovers_after_error(window):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    activity = window.activity
+    record = SimpleNamespace(
+        started_at=datetime.now(UTC),
+        reason=SimpleNamespace(value="manual"),
+        success=False,
+        detail="token=private-value",
+    )
+    activity._render([record])
+    assert activity.table.rowCount() == 1
+    for column in range(activity.table.columnCount()):
+        item = activity.table.item(0, column)
+        assert "private-value" not in item.text() + item.toolTip()
+    activity._failed(RuntimeError("token=private-value"))
+    assert activity.refresh_button.isEnabled()
+    assert "private-value" not in activity.status.text()
+    activity._render([])
+    assert activity.table.rowCount() == 0
+
+
+def test_global_navigation_and_status_follow_monitor_state(window):
+    assert [window.nav.item(i).isHidden() for i in range(4)] == [False] * 4
+    window.dashboard.manage_requested.emit()
+    assert window.stack.currentWidget() is window.accounts_view
+    window.dashboard.work_requested.emit()
+    assert window.stack.currentWidget() is window.conversations
+    window._monitoring_changed(False)
+    assert window.global_monitor.text() == "Start"
+    window._monitoring_changed(True)
+    assert window.global_monitor.text() == "Pause"
+
+
+def test_account_table_headers_sort_each_column_and_plan_is_badged(window):
+    from PySide6.QtWidgets import QLabel
+
+    view = window.dashboard
+    view._render(sample_profiles())
+    for choices in (
+        ("name", "name_desc"),
+        ("five_most", "five_least"),
+        ("weekly_most", "weekly_least"),
+        ("status", "status_desc"),
+    ):
+        button, _title = view._header_buttons[choices]
+        button.click()
+        assert view.sort_order.currentData() == choices[0]
+        assert not button.icon().isNull()
+        button.click()
+        assert view.sort_order.currentData() == choices[1]
+        assert not button.icon().isNull()
+    profile = view._account_rows["Personal"]
+    assert any(
+        item.objectName() == "PlanBadge" and item.text() == "Plus"
+        for item in profile.findChildren(QLabel)
+    )
+
+
+def test_conversation_and_activity_dates_sort_chronologically(window):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from PySide6.QtCore import Qt
+
+    from codex_account_manager.domain.models import ThreadRecord
+
+    threads = [
+        ThreadRecord(
+            id="later", title="Later", source="cli", updated_at=datetime(2026, 10, 1, tzinfo=UTC)
+        ),
+        ThreadRecord(
+            id="earlier",
+            title="Earlier",
+            source="cli",
+            updated_at=datetime(2026, 9, 30, tzinfo=UTC),
+        ),
+    ]
+    conversations = window.conversations
+    conversations._render_threads(threads)
+    conversations.table.sortItems(3, Qt.SortOrder.AscendingOrder)
+    assert conversations.table.item(0, 0).text() == "Earlier"
+    conversations.table.sortItems(3, Qt.SortOrder.DescendingOrder)
+    assert conversations.table.item(0, 0).text() == "Later"
+
+    activity = window.activity
+    records = [
+        SimpleNamespace(
+            started_at=thread.updated_at, reason=SimpleNamespace(value="manual"), success=True
+        )
+        for thread in threads
+    ]
+    activity._render(records)
+    activity.table.sortItems(0, Qt.SortOrder.AscendingOrder)
+    assert activity.table.item(0, 0).text().startswith("30.09")
+    activity.table.sortItems(0, Qt.SortOrder.DescendingOrder)
+    assert activity.table.item(0, 0).text().startswith("01.10")
+
+
+def test_account_list_sorts_names_without_selecting_a_row(window):
+    from codex_account_manager.domain.models import Profile
+
+    table_view = window.accounts_view
+    table_view._render(
+        [
+            Profile(alias="Zulu", codex_home="unused", bound_account_id="1"),
+            Profile(alias="Alpha", codex_home="unused", bound_account_id="2"),
+        ]
+    )
+    assert list(table_view.table.rows) == ["Alpha", "Zulu"]
+    table_view._sort_column(("name", "name_desc"))
+    assert list(table_view.table.rows) == ["Zulu", "Alpha"]
+
+
+def test_account_summary_and_filter_reflect_verified_availability(window):
+    view = window.accounts_view
+    view._render(sample_profiles())
+    assert view.total_value.text() == "4"
+    assert int(view.ready_value.text()) + int(view.attention_value.text()) == 4
+    assert not hasattr(view, "action_bar")
+    view.status_filter.setCurrentIndex(view.status_filter.findData("ready"))
+    shown = list(view.table.rows)
+    assert len(shown) == int(view.ready_value.text())
+    view.search.setText("no such account")
+    assert not view.table.rows
+
+
+def test_account_usage_sort_and_email_search(window):
+    view = window.accounts_view
+    view._render(sample_profiles())
+    view._sort_column(("five_most", "five_least"))
+    assert list(view.table.rows)[0] == "Studio"
+    view._sort_column(("five_most", "five_least"))
+    assert list(view.table.rows)[0] == "Client workspace"
+    view.search.setText("studio@example.com")
+    assert list(view.table.rows) == ["Studio"]
+    assert view.table.rows["Studio"]._status_host is not None
+    view.search.clear()
+    window.nav.setCurrentRow(1)
+    window.show()
+    assert all(row._switch_btn.menu() for row in view.table.rows.values())
+    assert not hasattr(view, "action_bar")
+
+
+def test_activity_filters_real_handoffs_and_reports_visible_count(window):
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    view = window.activity
+    now = datetime.now(UTC)
+    view._render(
+        [
+            SimpleNamespace(started_at=now, reason=SimpleNamespace(value="manual"), success=True),
+            SimpleNamespace(
+                started_at=now - timedelta(days=20),
+                reason=SimpleNamespace(value="usage_limited"),
+                success=False,
+            ),
+        ]
+    )
+    view.date_filter.setCurrentIndex(view.date_filter.findData(7))
+    assert sum(not view.table.isRowHidden(row) for row in range(2)) == 1
+    assert "1 of 2" in view.status.text()
+    view.result_filter.setCurrentIndex(view.result_filter.findData("failed"))
+    assert view.table.isHidden()
+    assert "filters" in view.empty.title.text()
+
+
+def test_activity_shows_account_handoff_and_elapsed_time(window):
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    start = datetime.now(UTC)
+    record = SimpleNamespace(
+        started_at=start,
+        finished_at=start + timedelta(seconds=37),
+        reason=SimpleNamespace(value="manual"),
+        from_profile_id="first",
+        to_profile_id="second",
+        success=True,
+        detail="token=private-value",
+    )
+    view = window.activity
+    view._render(([record], {"first": "Personal", "second": "Studio"}))
+    assert view.table.item(0, 2).text() == "Personal → Studio"
+    assert view.table.item(0, 4).text() == "00:37"
+    view.search.setText("studio")
+    assert not view.table.isRowHidden(0)
+    assert all(
+        "private-value" not in view.table.item(0, column).text()
+        for column in range(view.table.columnCount())
+    )
+
+
+def test_work_details_are_optional_and_list_keeps_all_columns(window):
+    from codex_account_manager.continuity.tracking import ObservedWork
+
+    view = window.conversations
+    view._render_tracking(
+        ([ObservedWork("job", "account", "inProgress", "active", True, False, 1)], {})
+    )
+    assert all(not view.tracked_table.isColumnHidden(column) for column in range(5))
+    assert view.detail_scroll.isHidden()
+    view.details_button.setChecked(True)
+    assert not view.detail_scroll.isHidden()
+
+
+def test_tracked_jobs_sort_by_observation_time(window):
+    from PySide6.QtCore import Qt
+
+    from codex_account_manager.continuity.tracking import ObservedWork
+
+    view = window.conversations
+    view._render_tracking(
+        (
+            [
+                ObservedWork("older", "account", "inProgress", "active", True, False, 1),
+                ObservedWork("newer", "account", "completed", "complete", True, False, 2),
+            ],
+            {},
+        )
+    )
+    view.tracked_table.sortItems(4, Qt.SortOrder.DescendingOrder)
+    assert view.tracked_table.item(0, 0).data(Qt.ItemDataRole.UserRole) == "newer"
+    assert view.tracked_table.cellWidget(0, 5) is not None
+    assert view._select_work("older")
+    assert (
+        view.tracked_table.item(view.tracked_table.currentRow(), 0).data(Qt.ItemDataRole.UserRole)
+        == "older"
+    )
+
+
+def test_account_and_work_columns_fill_width_and_keep_manual_resize(window, app):
+    from codex_account_manager.continuity.tracking import ObservedWork
+    from codex_account_manager.gui.widgets import Pill
+
+    window.resize(1600, 940)
+    window.show()
+    window.nav.setCurrentRow(0)
+    app.processEvents()
+    assert (
+        window.dashboard.search.height()
+        == window.dashboard.account_filter.height()
+        == window.dashboard.sort_button.height()
+    )
+    accounts = window.accounts_view
+    accounts._render(sample_profiles())
+    window.nav.setCurrentRow(1)
+    app.processEvents()
+    assert accounts.search.height() == accounts.status_filter.height()
+    assert type(accounts.table) is type(window.dashboard.account_table)
+    assert (
+        accounts.table.actions_heading.text()
+        == window.dashboard.account_table.actions_heading.text()
+    )
+    account_row = next(iter(accounts.table.rows.values()))
+    overview_row = window.dashboard._account_rows[account_row.alias]
+    assert [
+        cell.x()
+        for cell in [account_row._identity, *account_row._usage_cells, account_row._status_host]
+    ] == [
+        cell.x()
+        for cell in [overview_row._identity, *overview_row._usage_cells, overview_row._status_host]
+    ]
+    assert abs(accounts.table.header.width() - accounts.table.scroll_area.viewport().width()) <= 1
+    window.resize(1500, 900)
+    app.processEvents()
+    assert abs(accounts.table.header.width() - accounts.table.scroll_area.viewport().width()) <= 1
+
+    work = window.conversations
+    work._render_tracking(
+        ([ObservedWork("job", "account", "inProgress", None, False, False, 1)], {})
+    )
+    window.nav.setCurrentRow(2)
+    app.processEvents()
+    assert work.work_search.height() == work.work_filter.height()
+    assert (
+        abs(
+            sum(work.tracked_table.columnWidth(i) for i in range(6))
+            - work.tracked_table.viewport().width()
+        )
+        <= 2
+    )
+    work_badge = work.tracked_table.cellWidget(0, 2).findChild(Pill)
+    assert work_badge is not None
+    assert (
+        abs(
+            work_badge.mapTo(work.tracked_table.viewport(), QPoint()).x()
+            - (work.tracked_table.columnViewportPosition(2) + 14)
+        )
+        <= 2
+    )
+    window.resize(950, 800)
+    app.processEvents()
+    assert all(
+        work.tracked_table.columnWidth(i) >= minimum
+        for i, minimum in enumerate((180, 90, 130, 110, 110, 90))
+    )
+    assert work.tracked_table.horizontalScrollBar().maximum() == 0
+
+    window.resize(1480, 960)
+    window.nav.setCurrentRow(5)
+    app.processEvents()
+    diagnostics = window.diagnostics
+    assert (
+        abs(
+            sum(diagnostics.table.columnWidth(i) for i in range(diagnostics.table.columnCount()))
+            - diagnostics.table.viewport().width()
+        )
+        <= 2
+    )
+
+
+def test_shutdown_duration_and_confirmation_are_turkish(window, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from codex_account_manager.gui import power
+    from codex_account_manager.gui.i18n import language, set_language
+    from codex_account_manager.gui.power import PowerControls
+    from codex_account_manager.monitoring.power import PowerTarget
+
+    monkeypatch.setattr(power, "sys", SimpleNamespace(platform="win32"))
+    previous = language()
+    set_language("tr")
+    try:
+        controls = PowerControls(PreviewRunner(), window.accounts)
+        assert controls.status.text() == "Otomatik kapatma kapalı."
+        assert not controls.enable_toggle.isChecked()
+        controls.countdown_minutes.setValue(7)
+        assert controls.plan.seconds == 420
+        prompts = []
+
+        def decline(_parent, title, message, _buttons, _default):
+            prompts.append((title, message))
+            return QMessageBox.StandardButton.No
+
+        monkeypatch.setattr(QMessageBox, "question", decline)
+        controls.arm(PowerTarget("limits"))
+        assert prompts and "7 dakika" in prompts[0][1]
+        assert "Otomatik kapatmayı etkinleştir" == prompts[0][0]
+        assert controls.plan.target is None
+        assert not controls.timer.isActive()
+        assert not controls.enable_toggle.isChecked()
+        monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+        monkeypatch.setattr(controls, "_tick", lambda: None)
+        controls.enable_toggle.setChecked(True)
+        assert controls.plan.target == PowerTarget("limits")
+        assert not controls.countdown_minutes.isEnabled()
+        controls.cancel()
+        assert not controls.enable_toggle.isChecked()
+        assert controls.countdown_minutes.isEnabled()
+        controls.deleteLater()
+    finally:
+        set_language(previous)

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from codex_account_manager.accounts.service import AccountService
@@ -15,8 +17,12 @@ from codex_account_manager.continuity.automation import (
     ContinuationTicket,
     has_verified_limit_turn,
 )
-from codex_account_manager.continuity.tracking import WorkTracker
-from codex_account_manager.core.errors import AppServerError, DesktopContinuationRequired
+from codex_account_manager.continuity.tracking import WorkTracker, goal_signature
+from codex_account_manager.core.errors import (
+    AppServerError,
+    HandoffDeferredError,
+    LocalResponseTooLargeError,
+)
 from codex_account_manager.core.events import bus
 from codex_account_manager.core.logging import get_logger
 from codex_account_manager.core.paths import paths
@@ -28,6 +34,7 @@ from codex_account_manager.storage.repositories import (
     EventRepository,
     HandoffRepository,
     ProfileRepository,
+    SettingsRepository,
     ThreadRepository,
 )
 
@@ -58,8 +65,13 @@ class ContinuityService:
         self.profiles = profiles or ProfileRepository()
         self.automation = ContinuationSupervisor()
         self.tracker = WorkTracker()
+        self._work_running = False
+        self._work_verified = False
+        self._restart_independent: set[str] = set()
+        self._unavailable_independent: set[str] = set()
+        self._restart_blockers: set[str] = set()
+        self._turn_baselines: dict[str, tuple[str, str, str, int]] = {}
 
-    # Thread tracking
     async def sync_threads(self) -> list[ThreadRecord]:
         """Read threads from the App Server and persist lightweight records."""
         adapter = CodexAppServer(paths.shared_codex_home)
@@ -94,6 +106,8 @@ class ContinuityService:
             )
             records.append(record)
         await self.threads.replace_listed(records)
+        await self.tracker.reconcile({record.id for record in records})
+        bus.publish("work.observed")
         return sorted(records, key=lambda record: record.updated_at, reverse=True)
 
     async def read_native_goal(self, thread_id: str) -> GoalInfo | None:
@@ -106,26 +120,40 @@ class ContinuityService:
 
     async def observe_work(self) -> str | None:
         """Refresh running and interrupted work before evaluating account failover."""
+        self._work_running = False
+        self._work_verified = False
+        self._restart_independent.clear()
+        self._unavailable_independent.clear()
+        self._restart_blockers.clear()
         bus.publish("work.observation_status", state="checking")
         try:
             async with asyncio.timeout(OBSERVATION_TIMEOUT):
                 return await self._observe_work()
         except TimeoutError:
+            await self.tracker.unverified()
             bus.publish("work.observation_status", state="timed_out")
             raise
         except Exception:
+            await self.tracker.unverified()
             bus.publish("work.observation_status", state="failed")
             raise
 
     async def _observe_work(self) -> str | None:
+        generation = self.tracker.generation
         adapter = CodexAppServer(paths.shared_codex_home, experimental=True)
         try:
             await adapter.start()
             account_id = (await adapter.read_account()).account_id
             if not account_id:
+                await self.tracker.unverified()
                 bus.publish("work.observation_status", state="signed_out")
                 return None
-            infos = await adapter.list_threads(max_items=30, include_subagents=False)
+            infos = await adapter.list_threads(include_subagents=False)
+            listed = {info.id for info in infos}
+            self._turn_baselines = {
+                key: value for key, value in self._turn_baselines.items() if key in listed
+            }
+            await self.tracker.reconcile({info.id for info in infos})
             candidates = sorted(
                 (i for i in infos if i.id and not (i.source or "").startswith("subAgent")),
                 key=lambda i: i.recency_at or i.updated_at or 0,
@@ -133,42 +161,86 @@ class ContinuityService:
             )
             tracked = await self.tracker.ids(account_id)
             selected = list(dict.fromkeys([*tracked, *(i.id for i in candidates[:20])]))
-            desktop_ids = {i.id for i in candidates if i.source == "vscode"}
+            sources = {i.id: i.source for i in candidates}
             for thread_id in tracked:
                 saved_thread = await self.threads.get(thread_id)
-                if saved_thread and saved_thread.source == "vscode":
-                    desktop_ids.add(thread_id)
+                if saved_thread and thread_id not in sources:
+                    sources[thread_id] = saved_thread.source
             checked = 0
             unavailable = 0
+            unsupported = 0
+            completed: set[str] = set()
             semaphore = asyncio.Semaphore(THREAD_CHECK_CONCURRENCY)
+            await self.tracker.unverified(selected)
 
             async def inspect(thread_id: str) -> None:
-                nonlocal checked, unavailable
+                nonlocal checked, unavailable, unsupported
                 async with semaphore:
                     try:
                         async with asyncio.timeout(THREAD_CHECK_TIMEOUT):
+                            source = sources.get(thread_id)
+                            if source is None:
+                                source = await adapter.thread_source(thread_id)
+                            if source not in {"cli", "exec", "appServer", "vscode"}:
+                                unsupported += 1
+                                completed.add(thread_id)
+                                return
                             turn: dict | None
-                            if thread_id in desktop_ids:
-                                turn = await verified_desktop_turn(
-                                    self.automation.native, adapter, thread_id
-                                )
+                            if source == "vscode":
+                                if not await adapter.is_desktop_thread(thread_id):
+                                    self._restart_independent.add(thread_id)
+                                    if not await self.automation.ide_enabled():
+                                        unsupported += 1
+                                        completed.add(thread_id)
+                                        return
+                                    turn, _owner = await self.automation.owner_turn(
+                                        adapter, thread_id
+                                    )
+                                else:
+                                    turn = await verified_desktop_turn(
+                                        self.automation.native, adapter, thread_id
+                                    )
                             else:
+                                self._restart_independent.add(thread_id)
                                 turn = await adapter.observed_turn(thread_id)
+                            if (
+                                thread_id not in self._restart_independent
+                                and turn
+                                and turn.get("status") == "inProgress"
+                            ):
+                                self._work_running = True
+                                self._restart_blockers.add(thread_id)
                             goal = await adapter.get_goal(thread_id) if turn else None
                             if turn and goal is None:
                                 raise AppServerError("Observed goal could not be verified.")
+                            new_turn = False
+                            if turn and goal is not None:
+                                previous = self._turn_baselines.get(thread_id)
+                                current = (account_id, turn["id"], goal_signature(goal), generation)
+                                new_turn = bool(
+                                    previous
+                                    and previous[0] == current[0]
+                                    and previous[1] != current[1]
+                                    and previous[2:] == current[2:]
+                                )
+                                self._turn_baselines[thread_id] = current
                             await self.tracker.observe(
                                 account_id,
                                 thread_id,
                                 turn,
                                 goal,
                                 limited=has_verified_limit_turn(turn, goal),
+                                new_turn=new_turn,
+                                generation=generation,
                             )
                             checked += 1
+                            completed.add(thread_id)
                             bus.publish("work.observed")
-                    except Exception:
+                    except Exception as exc:
                         unavailable += 1
-                        log.warning("Could not verify an observed conversation.")
+                        log.warning(
+                            "Could not verify an observed conversation (%s).", type(exc).__name__
+                        )
 
             try:
                 async with asyncio.timeout(THREAD_SCAN_TIMEOUT):
@@ -176,17 +248,90 @@ class ContinuityService:
                         for thread_id in selected:
                             group.create_task(inspect(thread_id))
             except TimeoutError:
-                unavailable = len(selected) - checked
+                unavailable = len(selected) - checked - unsupported
+            incomplete = set(selected) - completed
+            self._unavailable_independent = incomplete & self._restart_independent
+            self._work_verified = not (incomplete - self._restart_independent)
+            self._restart_blockers.update(incomplete - self._restart_independent)
             bus.publish(
                 "work.observation_status",
                 state="partial" if unavailable else "ready",
                 checked=checked,
                 unavailable=unavailable,
+                unsupported=unsupported,
                 checked_at=datetime.now().strftime("%H:%M:%S"),
             )
             return account_id
         finally:
             await adapter.aclose()
+
+    async def continuation_support(self, thread_id: str) -> str:
+        """Check source and native read availability without loading or sending input."""
+        adapter = CodexAppServer(paths.shared_codex_home, experimental=True)
+        try:
+            async with asyncio.timeout(12):
+                await adapter.start()
+                source = await adapter.thread_source(thread_id)
+                if source in {"cli", "exec", "appServer"}:
+                    return "cli"
+                if source != "vscode":
+                    return "unsupported"
+                if await self.automation.uses_ide(adapter, thread_id):
+                    await self.automation.ide.inspect(thread_id)
+                    return "ide"
+                await self.automation.native.latest_turn(thread_id)
+                return "desktop"
+        except LocalResponseTooLargeError:
+            return "response_too_large"
+        except (AppServerError, TimeoutError, OSError):
+            return "unverified"
+        finally:
+            await adapter.aclose()
+
+    async def queue_verified_continuation(self, thread_id: str) -> None:
+        from codex_account_manager.continuity.policy import SwitchPolicy
+        from codex_account_manager.core.operation_lock import OperationLock
+        from codex_account_manager.storage.database import connect
+
+        if await SettingsRepository().get("monitor_enabled", "true") != "true":
+            raise AppServerError("Enable monitoring before requesting continuation.")
+        with OperationLock(paths.data_dir / "account-operation.lock"):
+            snapshot = await self.accounts.read_snapshot(paths.shared_codex_home)
+            profile = next(
+                (
+                    p
+                    for p in await self.profiles.list()
+                    if p.bound_account_id == snapshot.account_id
+                ),
+                None,
+            )
+            if profile is None or not profile.bound_account_id:
+                raise AppServerError("The active account identity could not be verified.")
+            active = await self.accounts._health_for(
+                profile, active_account_id=snapshot.account_id, active_snapshot=snapshot
+            )
+            if not SwitchPolicy._is_available(active):
+                raise AppServerError("The active account must have verified available capacity.")
+            ticket = await self.automation.prepare(thread_id)
+            if ticket is None:
+                raise AppServerError(
+                    "No eligible usage-limit interruption was verified. Nothing was sent."
+                )
+            async with connect() as db:
+                attempt = await (
+                    await db.execute(
+                        "SELECT 1 FROM continuation_attempts WHERE thread_id=? AND source_turn_id=?",
+                        (ticket.thread_id, ticket.turn_id),
+                    )
+                ).fetchone()
+            if attempt:
+                raise AppServerError(
+                    "This continuation was already attempted. Inspect the conversation before retrying."
+                )
+            await self.automation.save_pending(
+                [replace(ticket, account_id=profile.bound_account_id)]
+            )
+        bus.publish("monitor.refresh_requested")
 
     # Account switch commits before conversation loading and goal reconciliation.
     async def handoff(
@@ -196,6 +341,7 @@ class ContinuityService:
         reason: HandoffReason = HandoffReason.MANUAL,
         thread_id: str | None = None,
         transaction: AuthTransaction | None = None,
+        before_desktop_stop: Callable[[], Awaitable[None]] | None = None,
     ) -> SwitchResult:
         target = await self.profiles.get_by_alias(target_alias)
         if not target:
@@ -225,7 +371,7 @@ class ContinuityService:
 
         tx = transaction or AuthTransaction()
         try:
-            result = await tx.switch(target)
+            result = await tx.switch(target, before_desktop_stop=before_desktop_stop)
         except (Exception, asyncio.CancelledError) as exc:
             handoff.finished_at = datetime.now(UTC)
             handoff.success = False
@@ -266,43 +412,93 @@ class ContinuityService:
                 bus.publish("continuation.status", state="needs_user")
         return result
 
+    async def _require_restart_safe(self, expected_account_id: str | None = None) -> str | None:
+        try:
+            account_id = await self.observe_work()
+        except Exception as exc:
+            raise HandoffDeferredError(
+                "Account switch is waiting: conversation state could not be verified. Codex remains open."
+            ) from exc
+        for thread_id in self._restart_blockers:
+            await self.automation.report(thread_id, "waiting_shared", "desktop_restart")
+        if not self._work_verified:
+            raise HandoffDeferredError(
+                "Account switch is waiting: conversation state could not be verified. Codex remains open."
+            )
+        if self._work_running:
+            raise HandoffDeferredError(
+                "Account switch is waiting for running conversations to finish or report their limit. Codex remains open."
+            )
+        if expected_account_id is not None and account_id != expected_account_id:
+            raise HandoffDeferredError(
+                "Account switch is waiting: the active account changed. Codex remains open."
+            )
+        return account_id
+
     async def continue_on_limit(
         self, target_alias: str, *, transaction: AuthTransaction | None = None
     ) -> SwitchResult:
         """Commit the account handoff before starting any verified interrupted work."""
         if self.automation.tasks:
             raise AppServerError("An automatic continuation is still running.")
-        account_id = None
-        try:
-            account_id = await self.observe_work()
-        except (Exception, asyncio.CancelledError) as exc:
-            if isinstance(exc, asyncio.CancelledError):
-                raise
-            log.warning("Could not refresh conversations before account handoff: %s", exc)
+        generation = self.tracker.generation
+        account_id = await self._require_restart_safe()
+
+        async def before_desktop_stop() -> None:
+            await self._require_restart_safe(account_id)
+            if (
+                await SettingsRepository().get("monitor_enabled", "true") != "true"
+                or self.tracker.generation != generation
+            ):
+                raise HandoffDeferredError("Account switch stopped because monitoring changed.")
+
         saved = await self.tracker.limited(account_id) if account_id else []
         tickets = []
-        preparation_failed = False
+        preparation_failed = bool(self._unavailable_independent)
+        restart_blocked = False
+        for thread_id in self._unavailable_independent:
+            await self.automation.report(thread_id, "needs_user", "verification")
         desktop_threads: list[str] = []
         desktop_tickets: list[ContinuationTicket] = []
         for thread_id, turn_id, signature in saved:
             try:
-                ticket = await self.automation.prepare(thread_id)
+                async with asyncio.timeout(12):
+                    ticket = await self.automation.prepare(thread_id)
                 if ticket and ticket.turn_id == turn_id and ticket.goal_signature == signature:
-                    tickets.append(ticket)
-            except DesktopContinuationRequired:
-                desktop_threads.append(thread_id)
-                desktop_tickets.append(
-                    ContinuationTicket(thread_id, turn_id, goal_signature=signature, desktop=True)
-                )
+                    if ticket.desktop:
+                        desktop_threads.append(thread_id)
+                        desktop_tickets.append(ticket)
+                    else:
+                        tickets.append(ticket)
+                elif ticket:
+                    await self.automation.report(thread_id, "needs_user", "verification")
+                    preparation_failed = True
+                    restart_blocked |= thread_id not in self._restart_independent
             except Exception:
                 preparation_failed = True
-        selected_thread = tickets[0].thread_id if tickets else None
-        result = await self.handoff(
-            target_alias,
-            reason=HandoffReason.USAGE_LIMITED,
-            thread_id=selected_thread,
-            transaction=transaction,
-        )
+                restart_blocked |= thread_id not in self._restart_independent
+                await self.automation.report(thread_id, "needs_user", "preparation")
+        if restart_blocked:
+            raise HandoffDeferredError(
+                "Account switch is waiting: continuation could not be prepared. Codex remains open."
+            )
+        target = await self.profiles.get_by_alias(target_alias)
+        if not target or not target.bound_account_id:
+            raise AppServerError("The target account identity could not be verified.")
+        pending = [
+            replace(t, account_id=target.bound_account_id) for t in desktop_tickets + tickets
+        ]
+        await self.automation.save_pending(pending)
+        try:
+            result = await self.handoff(
+                target_alias,
+                reason=HandoffReason.USAGE_LIMITED,
+                transaction=transaction,
+                before_desktop_stop=before_desktop_stop,
+            )
+        except BaseException:
+            await self.automation.discard_pending(pending)
+            raise
         if account_id:
             try:
                 await self.tracker.clear(account_id, [ticket.thread_id for ticket in tickets])
@@ -322,7 +518,10 @@ class ContinuityService:
             except Exception:
                 log.warning("Account switch committed; Desktop follow-up could not be saved.")
                 bus.publish("continuation.status", state="needs_user", stage="journal")
-        tickets = ready_desktop + (tickets if result.detail is None else [])
+        tickets = ready_desktop + tickets
+        await self.automation.discard_pending(
+            [t for t in pending if t.thread_id not in {item.thread_id for item in tickets}]
+        )
         if tickets:
             try:
                 target = await self.profiles.get_by_alias(target_alias)
@@ -336,6 +535,7 @@ class ContinuityService:
                             target.bound_account_id,
                             ticket.goal_signature,
                             desktop=ticket.desktop,
+                            owner_id=ticket.owner_id,
                         )
                         for ticket in tickets
                     ]
@@ -365,6 +565,5 @@ class ContinuityService:
         finally:
             await adapter.aclose()
 
-    # Read models for the GUI/CLI
     async def recent_handoffs(self, limit: int = 20) -> list[HandoffRecord]:
         return await self.handoffs.recent(limit)

@@ -61,7 +61,7 @@ async def export_bundle(destination: Path | None = None) -> Path:
             "environment.json",
             json.dumps(
                 {
-                    "app": "Codex Account Manager",
+                    "app": "QuotaCrew",
                     "generated_at": stamp,
                 },
                 indent=2,

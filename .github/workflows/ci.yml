@@ -1,7 +1,7 @@
 name: CI
 on:
   push:
-    branches: [main, master, codex/release-validation]
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -84,7 +84,7 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m pip install -e ".[gui]" pyinstaller
-      - run: python -m PyInstaller --clean --noconfirm packaging/CodexAccountManager.spec
+      - run: python -m PyInstaller --clean --noconfirm packaging/QuotaCrew.spec
       - run: python scripts/verify_windows_package.py
       - name: Compile Windows installer
         shell: pwsh
@@ -99,4 +99,4 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: windows-portable
-          path: dist/CodexAccountManager/
+          path: dist/QuotaCrew/

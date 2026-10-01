@@ -63,6 +63,156 @@ async def _seed_two_profiles(migrated_db, accounts: AccountService):
     return p1, p2
 
 
+@pytest.mark.parametrize("block", [None, "monitor", "capacity", "claimed", "turn"])
+async def test_explicit_limit_recovery_checks_capacity_and_durable_claim(migrated_db, block):
+    from codex_account_manager.core.errors import AppServerError
+    from codex_account_manager.storage.database import connect
+    from codex_account_manager.storage.repositories import SettingsRepository
+    from tests.fakes import ExecutionServer
+
+    accounts = AccountService(
+        app_server_factory=lambda _: FakeAppServer(
+            account_id="acc-2", ordinary_usage_allowed=block != "capacity"
+        )
+    )
+    await _seed_two_profiles(migrated_db, accounts)
+    service = ContinuityService(accounts=accounts)
+    server = ExecutionServer()
+    service.automation.factory = lambda: server
+    if block == "monitor":
+        await SettingsRepository().set("monitor_enabled", "false")
+    elif block == "claimed":
+        ticket = await service.automation.prepare("thread")
+        assert await service.automation._claim(ticket)
+    elif block == "turn":
+        server.latest = {"id": "user-stopped", "status": "interrupted"}
+    if block:
+        with pytest.raises(AppServerError):
+            await service.queue_verified_continuation("thread")
+    else:
+        await service.queue_verified_continuation("thread")
+    async with connect() as db:
+        rows = await (await db.execute("SELECT account_id FROM pending_continuations")).fetchall()
+        assert rows == ([] if block else [("acc-2",)])
+    assert not server.turn_calls
+
+
+@pytest.mark.parametrize("state", ["inProgress", "unavailable"])
+async def test_quota_failover_never_stops_desktop_before_work_is_safe(
+    migrated_db, monkeypatch, state
+):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+
+    import codex_account_manager.continuity.service as cs
+
+    accounts = AccountService(app_server_factory=_factory("acc-2"))
+    await _seed_two_profiles(migrated_db, accounts)
+    fake = FakeAppServer(
+        threads=[replace(_thread("still-working", 999), source="vscode")],
+        turns={"still-working": {"id": "limited-turn", "status": "inProgress"}},
+    )
+    if state == "unavailable":
+
+        async def unavailable(_thread):
+            raise OSError("channel unavailable")
+
+    monkeypatch.setattr(cs, "CodexAppServer", lambda *_args, **_kwargs: fake)
+    service = ContinuityService(accounts=accounts)
+    fake.is_desktop_thread = AsyncMock(return_value=True)
+    service.automation.native.latest_turn = (
+        unavailable
+        if state == "unavailable"
+        else AsyncMock(return_value=fake._turns["still-working"])
+    )
+    await _observed_running("still-working")
+    desktop = FakeDesktop()
+    store = FileCredentialStore(shared_home=migrated_db.shared_codex_home)
+    store.write_active_atomic(b"original")
+
+    async def verify(_home):
+        return "acc-2"
+
+    tx = AuthTransaction(credential_store=store, desktop=desktop, verify_account=verify)
+    from codex_account_manager.core.errors import HandoffDeferredError
+
+    with pytest.raises(HandoffDeferredError):
+        await service.continue_on_limit("hesap2", transaction=tx)
+    assert not desktop.stopped
+    assert store.read_active() == b"original"
+    assert not await service.recent_handoffs()
+
+
+@pytest.mark.parametrize("change", ["preparation", "target_verification", "unavailable", "paused"])
+async def test_last_restart_check_preserves_work_started_during_handoff(
+    migrated_db, monkeypatch, change
+):
+    from dataclasses import replace
+    from pathlib import Path
+    from unittest.mock import AsyncMock
+
+    import codex_account_manager.continuity.service as cs
+    from codex_account_manager.core.errors import DesktopContinuationRequired, HandoffDeferredError
+    from codex_account_manager.storage.database import connect
+    from codex_account_manager.storage.repositories import SettingsRepository
+
+    accounts = AccountService(app_server_factory=_factory("acc-2"))
+    await _seed_two_profiles(migrated_db, accounts)
+    fake = FakeAppServer(
+        threads=[replace(_thread("desktop", 999), source="vscode")],
+        turns={"desktop": _limited_turn()},
+    )
+    monkeypatch.setattr(cs, "CodexAppServer", lambda *_args, **_kwargs: fake)
+    fake.is_desktop_thread = AsyncMock(return_value=True)
+    fake.require_headless_compatible = AsyncMock(side_effect=DesktopContinuationRequired("local"))
+    service = ContinuityService(accounts=accounts)
+    service.automation.factory = lambda: fake
+    turn = _limited_turn()
+
+    async def latest(_thread):
+        return turn
+
+    service.automation.native.latest_turn = latest
+    await _observed_running("desktop")
+    prepare = service.automation.prepare
+
+    async def changed_prepare(thread_id):
+        nonlocal turn
+        if change == "preparation":
+            turn = {"id": "new-user-turn", "status": "inProgress"}
+        ticket = await prepare(thread_id)
+        if change == "unavailable":
+            service.automation.native.latest_turn = AsyncMock(side_effect=OSError("disconnected"))
+        if change == "paused":
+            await SettingsRepository().set("monitor_enabled", "false")
+        return ticket
+
+    service.automation.prepare = changed_prepare
+    desktop = FakeDesktop()
+    store = FileCredentialStore(shared_home=migrated_db.shared_codex_home)
+    store.write_active_atomic(b"source-auth")
+    tx = AuthTransaction(credential_store=store, desktop=desktop)
+    monkeypatch.setattr(AccountService, "_active_account_id_safe", AsyncMock(return_value="acc-1"))
+
+    async def verify(home):
+        nonlocal turn
+        assert Path(home) != migrated_db.shared_codex_home
+        if change == "target_verification":
+            turn = {"id": "new-user-turn", "status": "inProgress"}
+        return "acc-2"
+
+    tx._verify = verify
+    with pytest.raises(HandoffDeferredError):
+        await service.continue_on_limit("hesap2", transaction=tx)
+    assert desktop.stopped == desktop.launched == 0
+    assert store.read_active() == b"source-auth"
+    assert not tx.recovery_path.exists()
+    assert not service.automation.tasks
+    async with connect() as db:
+        assert not await (await db.execute("SELECT * FROM pending_continuations")).fetchall()
+        assert not await (await db.execute("SELECT * FROM continuation_attempts")).fetchall()
+
+
 async def test_tracking_picks_verified_limit_over_newer_unrelated_chat(migrated_db, monkeypatch):
     import codex_account_manager.continuity.service as cs
 
@@ -131,6 +281,9 @@ async def test_continue_on_limit_carries_active_conversation(
             raise DesktopContinuationRequired("Continue in Desktop")
 
         fake.require_headless_compatible = desktop_only
+        from unittest.mock import AsyncMock
+
+        service.automation.native.latest_turn = AsyncMock(return_value=_limited_turn())
     launched = []
     service.automation.launch_batch = launched.extend
     await _observed_running("t-live", "acc-2")
@@ -138,14 +291,13 @@ async def test_continue_on_limit_carries_active_conversation(
     result = await service.continue_on_limit("hesap2", transaction=tx)
 
     assert result.success is True
-    # The conversation was resumed on the new profile.
     if desktop_owned:
         assert not fake.resume_calls
         assert len(launched) == 1 and launched[0].desktop
         assert (await service.tracker.visible())[0].turn_status == "awaitingDesktop"
         assert not await service.tracker.limited("acc-2")
     else:
-        assert "t-live" in fake.resume_calls
+        assert not fake.resume_calls
         assert len(launched) == 1 and launched[0].thread_id == "t-live"
     # A preview is not an instruction to create a goal.
     assert fake.set_goal_calls == []
@@ -253,6 +405,8 @@ async def test_failed_handoff_never_launches_model_work(migrated_db, monkeypatch
 async def test_conversation_load_failure_does_not_undo_verified_account_switch(
     migrated_db, monkeypatch
 ):
+    import asyncio
+
     import codex_account_manager.continuity.service as cs
     from codex_account_manager.continuity.automation import ContinuationSupervisor
     from tests.fakes import ExecutionServer
@@ -270,6 +424,7 @@ async def test_conversation_load_failure_does_not_undo_verified_account_switch(
     )
     execution = ExecutionServer()
     execution.latest = _limited_turn()
+    execution.account_id = "acc-2"
     service = ContinuityService(accounts=accounts)
     service.automation = ContinuationSupervisor(factory=lambda: execution)
     await _observed_running("thread")
@@ -277,7 +432,7 @@ async def test_conversation_load_failure_does_not_undo_verified_account_switch(
     async def cannot_resume(_thread_id):
         raise RuntimeError("Conversation could not be loaded")
 
-    service.resume_conversation = cannot_resume
+    execution.resume_for_continuation = cannot_resume
 
     async def verify(_home):
         return "acc-2"
@@ -285,13 +440,27 @@ async def test_conversation_load_failure_does_not_undo_verified_account_switch(
     tx = AuthTransaction(credential_store=store, desktop=FakeDesktop(), verify_account=verify)
     result = await service.continue_on_limit("hesap2", transaction=tx)
     assert result.success
-    assert result.detail == "Conversation could not be loaded"
+    assert result.detail is None
     assert store.read_active() == b"{}"
-    assert not service.automation.tasks
+    await asyncio.gather(*tuple(service.automation.tasks))
     assert not execution.turn_calls
     handoff = (await service.recent_handoffs())[0]
     assert handoff.success
     assert handoff.detail == result.detail
+    from codex_account_manager.storage.database import connect
+
+    async with connect() as db:
+        records = await (
+            await db.execute(
+                "SELECT thread_id, payload FROM events WHERE topic='continuation.status'"
+            )
+        ).fetchall()
+    import json
+
+    assert any(
+        tid == "thread" and json.loads(payload) == {"state": "needs_user", "stage": "conversation"}
+        for tid, payload in records
+    )
 
 
 async def test_history_write_failure_after_commit_does_not_report_switch_failure(migrated_db):
@@ -325,6 +494,7 @@ async def test_history_write_failure_after_commit_does_not_report_switch_failure
 async def test_two_desktop_handoffs_keep_goal_and_follow_new_account(migrated_db, monkeypatch):
     import asyncio
     from dataclasses import replace
+    from unittest.mock import AsyncMock
 
     import codex_account_manager.continuity.service as cs
     from codex_account_manager.core.errors import DesktopContinuationRequired
@@ -335,6 +505,7 @@ async def test_two_desktop_handoffs_keep_goal_and_follow_new_account(migrated_db
     store.write_active_atomic(b"source-auth")
     desktop_thread = replace(_thread("t-live", 999), source="vscode")
     fake = FakeAppServer(account_id="acc-1", threads=[desktop_thread])
+    fake.is_desktop_thread = AsyncMock(return_value=True)
     native_goal = GoalInfo("t-live", "Preserve this objective", "active", True, 5000, 100)
     turn = {"id": "first", "status": "inProgress"}
     sends = []
@@ -386,3 +557,135 @@ async def test_two_desktop_handoffs_keep_goal_and_follow_new_account(migrated_db
     assert len(sends) == 2
     assert not fake.resume_calls and not fake.set_goal_calls
     assert native_goal.token_budget == 5000 and native_goal.tokens_used == 100
+
+
+@pytest.mark.parametrize("ide_failure", [None, "observation", "preparation", "running", "timeout"])
+async def test_two_desktop_and_one_ide_limit_continue_after_committed_switch(
+    migrated_db, monkeypatch, ide_failure
+):
+    import asyncio
+    from dataclasses import replace
+
+    import codex_account_manager.continuity.service as cs
+    from codex_account_manager.adapters.native_ide import snapshot
+    from codex_account_manager.core.errors import (
+        DesktopContinuationRequired,
+        LocalResponseTooLargeError,
+    )
+    from codex_account_manager.storage.repositories import SettingsRepository
+    from tests.unit.test_native_ide import state_message
+
+    await SettingsRepository().set("ide_continue", "true")
+    accounts = AccountService(app_server_factory=_factory("acc-2"))
+    await _seed_two_profiles(migrated_db, accounts)
+    store = FileCredentialStore(shared_home=migrated_db.shared_codex_home)
+    store.write_active_atomic(b"source-auth")
+    ids = ["desktop-one", "desktop-two", "vscode"]
+    turns = {tid: {"id": "last", "status": "inProgress"} for tid in ids}
+    fake = FakeAppServer(
+        account_id="acc-1",
+        threads=[replace(_thread(tid, 100), source="vscode") for tid in ids],
+        turns=turns,
+    )
+    service = ContinuityService(accounts=accounts)
+    service.automation.factory = lambda: fake
+    monkeypatch.setattr(cs, "CodexAppServer", lambda *_args, **_kwargs: fake)
+
+    async def native_only(_tid):
+        raise DesktopContinuationRequired("local owner")
+
+    fake.require_headless_compatible = native_only
+    fail_ide = False
+
+    async def inspect(tid):
+        assert tid == "vscode", "Desktop must not use the IDE owner registry"
+        if fail_ide and ide_failure == "observation":
+            raise LocalResponseTooLargeError("test frame limit")
+        if fail_ide and ide_failure == "timeout":
+            await asyncio.Event().wait()
+        owner = fake.account_id + "-" + tid
+        turn = turns[tid]
+        message = state_message(
+            id=tid,
+            turns=[{"turnId": turn["id"], "status": turn["status"]}],
+            threadRuntimeStatus={"type": "systemError" if turn["status"] == "failed" else "active"},
+        )
+        message["sourceClientId"] = owner
+        message["params"]["conversationId"] = tid
+        return snapshot(message, tid, owner)
+
+    sends = []
+
+    async def send(tid, owner, _message_id):
+        assert tid == "vscode"
+        assert fake.account_id == "acc-2"
+        assert owner.owner_id == "acc-2-" + tid
+        assert tid not in sends
+        sends.append(tid)
+        turns[tid] = {"id": "next", "status": "inProgress"}
+        return turns[tid]
+
+    service.automation.ide.inspect = inspect
+    service.automation.ide.send = send
+
+    async def is_desktop(tid):
+        return tid.startswith("desktop-")
+
+    async def native_latest(tid):
+        assert tid.startswith("desktop-")
+        return turns[tid]
+
+    async def native_send(tid, turn_id):
+        assert tid.startswith("desktop-") and turn_id == "last"
+        assert fake.account_id == "acc-2" and tid not in sends
+        sends.append(tid)
+        turns[tid] = {"id": "next", "status": "inProgress"}
+        return {"threadId": tid}
+
+    fake.is_desktop_thread = is_desktop
+    service.automation.native.latest_turn = native_latest
+    service.automation.native.send = native_send
+    await service.observe_work()
+    assert len(await service.tracker.visible()) == 3
+    for tid in ids:
+        turns[tid] = {
+            "id": "last",
+            "status": "failed",
+            "error": {"codexErrorInfo": "usageLimitExceeded"},
+        }
+    fail_ide = True
+    if ide_failure == "running":
+        turns["vscode"] = {"id": "last", "status": "inProgress"}
+    if ide_failure == "timeout":
+        monkeypatch.setattr(cs, "THREAD_SCAN_TIMEOUT", 0.5)
+        monkeypatch.setattr(cs, "THREAD_CHECK_TIMEOUT", 10)
+    if ide_failure == "preparation":
+        original_prepare = service.automation.prepare
+
+        async def prepare(tid):
+            if tid == "vscode":
+                raise LocalResponseTooLargeError("test frame limit")
+            return await original_prepare(tid)
+
+        service.automation.prepare = prepare
+
+    async def verify(_home):
+        fake.account_id = "acc-2"
+        return "acc-2"
+
+    transaction = AuthTransaction(
+        credential_store=store, desktop=FakeDesktop(), verify_account=verify
+    )
+    result = await service.continue_on_limit("hesap2", transaction=transaction)
+    assert result.success
+    await asyncio.gather(*tuple(service.automation.tasks))
+    assert set(sends) == set(ids if ide_failure is None else ids[:2])
+    observed = {work.thread_id: work for work in await service.tracker.visible()}
+    assert all(observed[tid].turn_status == "inProgress" for tid in sends)
+    if ide_failure is not None:
+        from codex_account_manager.continuity.tracking import account_hash
+
+        assert observed["vscode"].account_hash == account_hash("acc-1")
+        assert observed["vscode"].verified == (ide_failure in {"running", "preparation"})
+    assert not await service.tracker.limited("acc-2")
+    assert not fake.resume_calls and not fake.set_goal_calls

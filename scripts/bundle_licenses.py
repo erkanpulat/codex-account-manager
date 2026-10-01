@@ -15,7 +15,7 @@ def collect_notices(root: Path) -> Path:
     qt_notices = root / "packaging" / "licenses" / f"Qt-{qt_version}.txt"
     if not qt_notices.is_file():
         raise RuntimeError(f"Review Qt {qt_version} notices before building this version.")
-    pending = ["codex-account-manager", "pyinstaller"]
+    pending = ["codex-quotacrew", "pyinstaller"]
     seen = set()
     sections = [
         "Binary dependency notices. Application source remains MIT licensed.",
@@ -28,12 +28,12 @@ def collect_notices(root: Path) -> Path:
         seen.add(name)
         dist = distribution(name)
         # Include runtime extras for the app, not development dependencies.
-        extra = "gui" if name == "codex-account-manager" else ""
+        extra = "gui" if name == "codex-quotacrew" else ""
         for raw in [] if name == "pyinstaller" else dist.requires or []:
             requirement = Requirement(raw)
             if requirement.marker is None or requirement.marker.evaluate({"extra": extra}):
                 pending.append(requirement.name)
-        if name == "codex-account-manager":
+        if name == "codex-quotacrew":
             continue
         sections.append(f"\n{name} {dist.version}\n")
         for entry in sorted(dist.files or [], key=str):

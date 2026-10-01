@@ -1,4 +1,4 @@
-"""Typed exception hierarchy for Codex Account Manager.
+"""Typed exception hierarchy for QuotaCrew.
 
 Exceptions never carry secret material. Messages are safe to log and to show in
 the UI. Anything credential-shaped must be redacted before it reaches an
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 
 class AccountManagerError(Exception):
-    """Base class for all Codex Account Manager errors."""
+    """Base class for all QuotaCrew errors."""
 
     def __init__(self, message: str):
         from codex_account_manager.core.redaction import redact_text
@@ -25,12 +25,36 @@ class AppServerError(AccountManagerError):
     """The Codex App Server failed to start, respond, or shut down cleanly."""
 
 
+class SignInRequiredError(AppServerError):
+    """Codex explicitly reported a missing or permanently rejected sign-in."""
+
+
+class SignedOutError(SignInRequiredError):
+    """Codex successfully read its authentication state and reported no account."""
+
+
 class DesktopContinuationRequired(AppServerError):
     """The conversation must retain its Desktop-owned tools and runtime."""
 
 
+class ConnectionNotReadyError(AppServerError):
+    """A read-only owner check timed out before any continuation was sent."""
+
+
+class OwnerNotFoundError(AppServerError):
+    """The local router explicitly reported that no client owns this thread."""
+
+
+class LocalResponseTooLargeError(AppServerError):
+    """A local response exceeded the bounded frame or aggregate read size."""
+
+
 class DesktopLaunchError(AccountManagerError):
     """Codex Desktop could not be started or did not become ready in time."""
+
+
+class HandoffDeferredError(AccountManagerError):
+    """A quota handoff must wait for work to reach a verified safe state."""
 
 
 class AccountRecoveryRequired(AccountManagerError):
@@ -52,3 +76,7 @@ class TransactionError(AccountManagerError):
         super().__init__(message)
         self.stage = stage
         self.rolled_back = rolled_back
+
+
+class OperationBusyError(TransactionError):
+    """A shared resource is temporarily held by another operation."""

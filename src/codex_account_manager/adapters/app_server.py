@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable
@@ -12,7 +13,12 @@ from pathlib import Path
 from codex_account_manager import __version__
 from codex_account_manager.adapters.interfaces import CapabilitySet, GoalInfo, ServerInfo
 from codex_account_manager.codex.runtime import codex_command, profile_environment
-from codex_account_manager.core.errors import AppServerError, DesktopContinuationRequired
+from codex_account_manager.core.errors import (
+    AppServerError,
+    DesktopContinuationRequired,
+    SignedOutError,
+    SignInRequiredError,
+)
 from codex_account_manager.core.logging import get_logger
 from codex_account_manager.core.redaction import redact_text
 from codex_account_manager.domain.models import AccountSnapshot, ThreadInfo
@@ -20,6 +26,7 @@ from codex_account_manager.domain.models import AccountSnapshot, ThreadInfo
 log = get_logger(__name__)
 
 _DEFAULT_TIMEOUT = 30.0
+CONTINUATION_POLL_SECONDS = 30.0
 # Methods we probe for capability detection (read-only, cheap).
 _PROBE_METHODS = ("account/read", "account/rateLimits/read", "thread/list")
 
@@ -33,10 +40,12 @@ class CodexAppServer:
         *,
         timeout: float = _DEFAULT_TIMEOUT,
         experimental: bool = False,
+        refresh_on_unauthorized: bool = False,
     ):
         self.codex_home = str(codex_home)
         self.timeout = timeout
         self.experimental = experimental
+        self.refresh_on_unauthorized = refresh_on_unauthorized
         self._turn_events: asyncio.Queue[dict] | None = None
         self._proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task | None = None
@@ -45,7 +54,6 @@ class CodexAppServer:
         self._capabilities: CapabilitySet | None = None
         self._closing = False
 
-    # Lifecycle
     async def start(self) -> ServerInfo:
         if self._proc is not None:
             raise AppServerError("App Server is already running")
@@ -76,7 +84,7 @@ class CodexAppServer:
                 {
                     "clientInfo": {
                         "name": "codex_account_manager",
-                        "title": "Codex Account Manager",
+                        "title": "QuotaCrew",
                         "version": __version__,
                     },
                     "capabilities": {"experimentalApi": self.experimental},
@@ -121,30 +129,32 @@ class CodexAppServer:
         except Exception:
             pass
 
-        if proc.returncode is None:
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except TimeoutError:
-                proc.terminate()
+        try:
+            if proc.returncode is None:
                 try:
-                    await asyncio.wait_for(proc.wait(), timeout=3)
+                    await asyncio.wait_for(proc.wait(), timeout=5)
                 except TimeoutError:
+                    proc.terminate()
+                    try:
+                        await asyncio.wait_for(proc.wait(), timeout=3)
+                    except TimeoutError:
+                        proc.kill()
+                        await asyncio.wait_for(proc.wait(), timeout=3)
+            else:
+                await asyncio.wait_for(proc.wait(), timeout=3)
+        finally:
+            if proc.returncode is None:
+                try:
                     proc.kill()
-                    await proc.wait()
-        else:
-            await proc.wait()
-
-        # Explicitly close the subprocess transport so its pipe handles are
-        # released now, rather than being reclaimed later by the GC (which emits
-        # "unclosed transport" ResourceWarnings on Windows Proactor).
-        transport = getattr(proc, "_transport", None)
-        if transport is not None:
-            try:
-                transport.close()
-            except Exception:
-                pass
-
-        self._proc = None
+                except ProcessLookupError:
+                    pass
+            transport = getattr(proc, "_transport", None)
+            if transport is not None:
+                try:
+                    transport.close()
+                except Exception:
+                    pass
+            self._proc = None
 
     async def __aenter__(self) -> CodexAppServer:
         await self.start()
@@ -153,11 +163,28 @@ class CodexAppServer:
     async def __aexit__(self, *exc: object) -> None:
         await self.aclose()
 
-    # JSON-RPC plumbing
     async def _read_loop(self) -> None:
         if self._proc is None or self._proc.stdout is None:
             raise AppServerError("App Server stdout is unavailable")
         stdout = self._proc.stdout
+        try:
+            await self._read_messages(stdout)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.warning("App Server reader stopped unexpectedly.")
+        finally:
+            if not self._closing:
+                if self._turn_events is not None:
+                    if self._turn_events.full():
+                        self._turn_events.get_nowait()
+                    self._turn_events.put_nowait({"closed": True})
+                for fut in self._pending.values():
+                    if not fut.done():
+                        fut.set_exception(AppServerError("Codex App Server closed unexpectedly"))
+                self._pending.clear()
+
+    async def _read_messages(self, stdout: asyncio.StreamReader) -> None:
         while True:
             try:
                 line = await stdout.readline()
@@ -212,23 +239,16 @@ class CodexAppServer:
                     else:
                         fut.set_exception(AppServerError("Invalid App Server response"))
 
-        # Stream closed: fail any remaining waiters.
-        if not self._closing:
-            if self._turn_events is not None:
-                if self._turn_events.full():
-                    self._turn_events.get_nowait()
-                self._turn_events.put_nowait({"closed": True})
-            for fut in self._pending.values():
-                if not fut.done():
-                    fut.set_exception(AppServerError("Codex App Server closed unexpectedly"))
-            self._pending.clear()
-
     async def _send(self, message: dict) -> None:
         if not self._proc or not self._proc.stdin:
             raise AppServerError("App Server is not running")
         data = (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
         self._proc.stdin.write(data)
-        await self._proc.stdin.drain()
+        try:
+            async with asyncio.timeout(self.timeout):
+                await self._proc.stdin.drain()
+        except TimeoutError as exc:
+            raise AppServerError("App Server write timed out.") from exc
 
     async def _request(self, method: str, params: dict | None = None) -> dict:
         self._request_id += 1
@@ -239,8 +259,9 @@ class CodexAppServer:
         if params is not None:
             message["params"] = params
         try:
-            await self._send(message)
-            return await asyncio.wait_for(fut, timeout=self.timeout)
+            async with asyncio.timeout(self.timeout):
+                await self._send(message)
+                return await fut
         except TimeoutError as exc:
             self._pending.pop(req_id, None)
             raise AppServerError(f"App Server request timed out: {method}") from exc
@@ -248,6 +269,8 @@ class CodexAppServer:
             self._pending.pop(req_id, None)
             if not fut.done():
                 fut.cancel()
+            elif not fut.cancelled():
+                fut.exception()
 
     async def _notify(self, method: str, params: dict | None = None) -> None:
         message: dict = {"method": method}
@@ -255,7 +278,6 @@ class CodexAppServer:
             message["params"] = params
         await self._send(message)
 
-    # High-level API
     async def capabilities(self) -> CapabilitySet:
         if self._capabilities is not None:
             return self._capabilities
@@ -302,8 +324,43 @@ class CodexAppServer:
             return None
 
     async def read_account(self) -> AccountSnapshot:
-        account_result = await self._request("account/read", {"refreshToken": False})
-        rate_result = await self._request("account/rateLimits/read")
+        try:
+            account_result = await self._request("account/read", {"refreshToken": False})
+        except AppServerError as exc:
+            if _requires_sign_in(exc):
+                raise SignInRequiredError(
+                    "Codex rejected this sign-in. Sign in again in Accounts."
+                ) from exc
+            raise
+        if "account" not in account_result:
+            raise AppServerError("Codex returned an invalid account response.")
+        if account_result["account"] is None:
+            raise SignedOutError("Codex has no signed-in account. Sign in again in Accounts.")
+        if not isinstance(account_result["account"], dict):
+            raise AppServerError("Codex returned an invalid account response.")
+        try:
+            rate_result = await self._request("account/rateLimits/read")
+        except AppServerError as exc:
+            if _requires_sign_in(exc):
+                raise SignInRequiredError(
+                    "Codex rejected this sign-in. Sign in again in Accounts."
+                ) from exc
+            if not self.refresh_on_unauthorized or not re.search(r"\b401\b", str(exc)):
+                raise
+            # Let Codex own OAuth rotation; retry only once, never for network/429 errors.
+            try:
+                account_result = await self._request("account/read", {"refreshToken": True})
+                if account_result.get("account") is None:
+                    raise SignInRequiredError(
+                        "Codex has no signed-in account. Sign in again in Accounts."
+                    )
+                rate_result = await self._request("account/rateLimits/read")
+            except AppServerError as retry_error:
+                if _requires_sign_in(retry_error) or re.search(r"\b401\b", str(retry_error)):
+                    raise SignInRequiredError(
+                        "Codex rejected this sign-in. Sign in again in Accounts."
+                    ) from retry_error
+                raise
 
         account = account_result.get("account") or {}
         routing = account_result.get("workspaceRouting") or {}
@@ -326,7 +383,7 @@ class CodexAppServer:
         return AccountSnapshot(
             account_id=account_id,
             account_type=account.get("type"),
-            email=account.get("email"),
+            email=_display_email(account.get("email")),
             plan_type=account.get("planType") or limits.get("planType"),
             ordinary_usage_allowed=rate_result.get("ordinaryUsageAllowed"),
             primary_used_percent=primary.get("usedPercent"),
@@ -432,18 +489,31 @@ class CodexAppServer:
             )
         return threads
 
-    async def require_headless_compatible(self, thread_id: str) -> None:
+    async def thread_source(self, thread_id: str) -> str:
         result = await self._request("thread/read", {"threadId": thread_id, "includeTurns": False})
-        thread = result.get("thread") or {}
+        thread = result.get("thread")
+        if not isinstance(thread, dict) or thread.get("id") != thread_id:
+            raise AppServerError("Conversation identity could not be verified.")
         source = thread.get("source")
-        if (
-            thread.get("id") != thread_id
-            or not isinstance(source, str)
-            or source not in {"cli", "exec", "appServer"}
-        ):
+        return source if isinstance(source, str) else "unknown"
+
+    async def require_headless_compatible(self, thread_id: str) -> None:
+        source = await self.thread_source(thread_id)
+        if source == "vscode":
             raise DesktopContinuationRequired(
-                "Continue this conversation in Codex Desktop. A separate App Server cannot preserve Desktop tools."
+                "This conversation requires its original Desktop or IDE runtime. A separate App Server cannot preserve Desktop tools."
             )
+        if source not in {"cli", "exec", "appServer"}:
+            raise AppServerError(
+                "Automatic continuation is not supported for this conversation source."
+            )
+
+    async def is_desktop_thread(self, thread_id: str) -> bool:
+        result = await self._request("thread/read", {"threadId": thread_id, "includeTurns": False})
+        thread = result.get("thread")
+        if not isinstance(thread, dict) or thread.get("id") != thread_id:
+            raise AppServerError("Conversation identity could not be verified.")
+        return thread.get("source") == "vscode" and thread.get("originator") == "Codex Desktop"
 
     async def resume_thread(self, thread_id: str) -> dict:
         await self.require_headless_compatible(thread_id)
@@ -595,7 +665,17 @@ class CodexAppServer:
                 finished = True
                 return turn
             while True:
-                event = await events.get()
+                try:
+                    event = await asyncio.wait_for(events.get(), timeout=CONTINUATION_POLL_SECONDS)
+                except TimeoutError:
+                    current_turn = await self.latest_turn(thread_id)
+                    if not current_turn or current_turn.get("id") != turn_id:
+                        raise AppServerError(
+                            "The owned continuation turn could not be verified."
+                        ) from None
+                    if current_turn.get("status") == "inProgress":
+                        continue
+                    event = {"threadId": thread_id, "turn": current_turn}
                 if event.get("closed"):
                     raise AppServerError(
                         "Continuation connection closed; inspect the conversation before retrying."
@@ -619,3 +699,23 @@ class CodexAppServer:
                 except Exception:
                     pass
             self._turn_events = None
+
+
+def _requires_sign_in(error: Exception) -> bool:
+    return isinstance(error, SignInRequiredError) or any(
+        code in str(error).casefold()
+        for code in (
+            "refresh_token_expired",
+            "refresh_token_revoked",
+            "refresh_token_reused",
+            "invalid_grant",
+        )
+    )
+
+
+def _display_email(value: object) -> str | None:
+    if not isinstance(value, str) or len(value) > 320 or "@" not in value:
+        return None
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+    return value

@@ -3,14 +3,14 @@ requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "codex-account-manager"
-version = "0.1.1"
-description = "Codex account switching, quota monitoring and local conversation management for Windows."
+name = "codex-quotacrew"
+version = "0.2.0"
+description = "QuotaCrew for Codex: multi-account management, quota monitoring and conversation continuation for Windows."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
-authors = [{ name = "Codex Account Manager contributors" }]
+authors = [{ name = "QuotaCrew contributors" }]
 keywords = [
     "codex",
     "openai",
@@ -42,10 +42,10 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/erkanpulat/codex-account-manager"
-Repository = "https://github.com/erkanpulat/codex-account-manager"
-Issues = "https://github.com/erkanpulat/codex-account-manager/issues"
-Changelog = "https://github.com/erkanpulat/codex-account-manager/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/erkanpulat/codex-quotacrew"
+Repository = "https://github.com/erkanpulat/codex-quotacrew"
+Issues = "https://github.com/erkanpulat/codex-quotacrew/issues"
+Changelog = "https://github.com/erkanpulat/codex-quotacrew/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 gui = ["PySide6==6.11.2"]
@@ -61,7 +61,7 @@ codex-accounts = "codex_account_manager.cli.main:app"
 cx = "codex_account_manager.cli.main:app"
 
 [project.gui-scripts]
-codex-account-manager = "codex_account_manager.gui.tray_main:main"
+quotacrew = "codex_account_manager.gui.tray_main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

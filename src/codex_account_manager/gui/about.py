@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QFrame,
+    QGridLayout,
+    QPushButton,
     QScrollArea,
     QVBoxLayout,
     QWidget,
@@ -14,6 +19,7 @@ from codex_account_manager.gui.i18n import (
 )
 from codex_account_manager.gui.view_base import BaseView, view_header
 from codex_account_manager.gui.widgets import label
+from codex_account_manager.updates import REPOSITORY
 
 
 class AboutView(BaseView):
@@ -22,7 +28,7 @@ class AboutView(BaseView):
         self._root.addWidget(
             view_header(
                 tr("About this application"),
-                tr("Codex Account Manager · Independent, open-source desktop utility"),
+                tr("QuotaCrew for Codex · Independent, open-source desktop utility"),
             )
         )
         scroll = QScrollArea()
@@ -32,6 +38,26 @@ class AboutView(BaseView):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(18)
+        support = QFrame()
+        support.setObjectName("Card")
+        buttons = QGridLayout(support)
+        buttons.setContentsMargins(22, 20, 22, 20)
+        buttons.setSpacing(10)
+        buttons.addWidget(label(tr("Support the project"), "H2"), 0, 0, 1, 2)
+        for index, (title, url) in enumerate(
+            (
+                ("Star on GitHub", f"https://github.com/{REPOSITORY}"),
+                ("Report an issue", f"https://github.com/{REPOSITORY}/issues"),
+                ("Contribute a pull request", f"https://github.com/{REPOSITORY}/pulls"),
+                ("Developer profile", "https://github.com/erkanpulat"),
+            )
+        ):
+            button = QPushButton(tr(title))
+            button.clicked.connect(
+                lambda _checked=False, url=url: QDesktopServices.openUrl(QUrl(url))
+            )
+            buttons.addWidget(button, 1 + index // 2, index % 2)
+        layout.addWidget(support)
         for title, description in (
             (
                 tr("What does it do?"),
@@ -40,9 +66,15 @@ class AboutView(BaseView):
                 ),
             ),
             (
+                tr("Desktop, CLI and IDE support"),
+                tr(
+                    "This is a desktop application; Codex CLI provides its connection. Desktop continuation is experimental. Optional IDE continuation uses the existing local Codex conversation owner and preserves its tools; live account-switch continuation in an IDE has not yet been verified. A running IDE may need reloading after a switch. Remote and WSL environments may use separate login storage."
+                ),
+            ),
+            (
                 tr("Does it work automatically?"),
                 tr(
-                    "Automatic switching is the default for new installations. When the active account reaches its usage limit, the application can switch to a verified account with capacity. Choose manual or confirmation mode in Settings. The check interval is adjustable from 30 to 3600 seconds; the default is 60 seconds. Monitoring requires the application to remain open, including in the system tray."
+                    "Checks are on by default for new installations. Choose automatic, confirmation or manual switching in Settings; pause or resume checks from Overview. Checks run every 60 seconds by default; the interval is adjustable from 30 to 3600 seconds. Closing the window quits unless you explicitly enable running in the tray. The sidebar always shows monitoring status."
                 ),
             ),
             (
@@ -54,7 +86,13 @@ class AboutView(BaseView):
             (
                 tr("Will my conversation continue by itself?"),
                 tr(
-                    "When enabled, a verified usage-limit interruption can continue after an account switch. The application sends a continuation message and follows an active goal until it completes or needs attention. Stop automatic work in Settings. Merely opening a conversation or saving a goal note does not start work."
+                    "With monitoring and continuation enabled, a verified usage-limit interruption can continue after an account switch. The exact turn and goal are checked again before input is sent. Unknown state, approval requests and user pauses stop automation. Merely opening a conversation or saving a local goal note does not start work."
+                ),
+            ),
+            (
+                tr("Automatic shutdown"),
+                tr(
+                    "Shutdown is off by default and must be enabled for each session. Choose all accounts limited or a selected conversation completed. Set a countdown from 1 to 1440 minutes (120 = 2 hours, 180 = 3 hours); cancel it from the window or tray. Closing the app cancels the plan. Other applications are not forcibly closed; save their work yourself."
                 ),
             ),
             (
@@ -70,9 +108,10 @@ class AboutView(BaseView):
                 ),
             ),
         ):
-            panel = QWidget()
+            panel = QFrame()
+            panel.setObjectName("Card")
             box = QVBoxLayout(panel)
-            box.setContentsMargins(0, 8, 12, 12)
+            box.setContentsMargins(22, 20, 22, 20)
             box.setSpacing(10)
             box.addWidget(label(title, "H2"))
             body = label(description, "Body")

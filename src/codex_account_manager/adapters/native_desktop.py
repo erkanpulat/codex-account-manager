@@ -23,14 +23,16 @@ import asyncio
 import json
 import os
 import re
-import struct
 import sys
 import threading
-import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from codex_account_manager.core.errors import AppServerError
+from codex_account_manager.core.errors import (
+    AppServerError,
+    ConnectionNotReadyError,
+    LocalResponseTooLargeError,
+)
 
 if TYPE_CHECKING:
     from codex_account_manager.adapters.app_server import CodexAppServer
@@ -125,7 +127,6 @@ def _exchange(payload: dict, cancelled: threading.Event, timeout: float) -> dict
         raise AppServerError("Native Desktop continuation requires Windows.")
     import pywintypes
     import win32con
-    import win32event
     import win32file
 
     prefix = "\\\\.\\pipe\\"
@@ -161,61 +162,11 @@ def _exchange(payload: dict, cancelled: threading.Event, timeout: float) -> dict
                 opened.Close()
     if handle is None:
         raise AppServerError("The verified Desktop native channel is unavailable.")
-    deadline = time.monotonic() + timeout
+    from codex_account_manager.adapters.windows_pipe import FramedPipe
 
-    def transfer(value: bytes | int) -> bytes:
-        operation = pywintypes.OVERLAPPED()
-        operation.hEvent = win32event.CreateEvent(None, True, False, None)
-        buffer = win32file.AllocateReadBuffer(value) if isinstance(value, int) else value
-        submitted = False
-        try:
-            if cancelled.is_set():
-                raise AppServerError("Desktop operation cancelled.")
-            if isinstance(value, int):
-                win32file.ReadFile(handle, buffer, operation)
-            else:
-                win32file.WriteFile(handle, buffer, operation)
-            submitted = True
-            while win32event.WaitForSingleObject(operation.hEvent, 50) == win32con.WAIT_TIMEOUT:
-                if cancelled.is_set() or time.monotonic() >= deadline:
-                    win32file.CancelIo(handle)
-                    raise AppServerError("Desktop delivery could not be confirmed.")
-            count = win32file.GetOverlappedResult(handle, operation, True)
-            if not count:
-                raise AppServerError("Desktop closed the native channel.")
-            if not isinstance(value, int) and count != len(value):
-                raise AppServerError("Desktop delivery could not be confirmed.")
-            return bytes(buffer[:count])
-        finally:
-            # Do not release a buffer while a cancelled read still references it.
-            if submitted:
-                try:
-                    win32file.CancelIo(handle)
-                except pywintypes.error:
-                    pass
-                try:
-                    win32file.GetOverlappedResult(handle, operation, True)
-                except pywintypes.error:
-                    pass
-            operation.hEvent.Close()
-
-    def read_exact(count: int) -> bytes:
-        data = bytearray()
-        while len(data) < count:
-            data.extend(transfer(count - len(data)))
-        return bytes(data)
-
-    try:
-        body = json.dumps(payload).encode()
-        if len(body) > MAX_FRAME:
-            raise AppServerError("Native Desktop request is too large.")
-        transfer(struct.pack("<I", len(body)) + body)
-        length = struct.unpack("<I", read_exact(4))[0]
-        if not 0 < length <= MAX_FRAME:
-            raise AppServerError("Desktop returned an invalid native frame.")
-        return json.loads(read_exact(length))
-    finally:
-        handle.Close()
+    with FramedPipe(handle, cancelled, timeout, MAX_FRAME) as pipe:
+        pipe.send(payload)
+        return pipe.receive()
 
 
 class NativeDesktop:
@@ -265,10 +216,14 @@ class NativeDesktop:
                 while True:
                     try:
                         return await self.latest_turn(thread_id)
+                    except LocalResponseTooLargeError:
+                        raise
                     except (AppServerError, OSError):
                         await asyncio.sleep(0.25)
         except TimeoutError as exc:
-            raise AppServerError("Desktop native connection did not become ready.") from exc
+            raise ConnectionNotReadyError(
+                "Desktop native connection did not become ready."
+            ) from exc
 
     async def send(self, thread_id: str, source_turn_id: str) -> dict:
         result = await self.call(thread_id, source_turn_id, send=True)

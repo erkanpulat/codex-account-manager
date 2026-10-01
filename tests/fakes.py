@@ -90,6 +90,12 @@ class FakeAppServer:
     async def observed_turn(self, thread_id: str) -> dict | None:
         return await self.latest_turn(thread_id)
 
+    async def is_desktop_thread(self, thread_id: str) -> bool:
+        return False
+
+    async def thread_source(self, thread_id: str) -> str:
+        return next((t.source or "cli" for t in self._threads if t.id == thread_id), "cli")
+
     async def require_headless_compatible(self, thread_id: str) -> None:
         pass
 

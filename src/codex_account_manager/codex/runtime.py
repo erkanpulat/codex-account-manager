@@ -8,6 +8,12 @@ from codex_account_manager.core.errors import CodexNotFoundError
 
 def find_codex() -> str:
     codex = shutil.which("codex.exe") or shutil.which("codex") or shutil.which("codex.cmd")
+    if not codex and os.name == "nt":
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            standalone = Path(local) / "Programs/OpenAI/Codex/bin/codex.exe"
+            if standalone.is_file():
+                codex = str(standalone)
 
     if not codex:
         raise CodexNotFoundError("Codex CLI not found on PATH.")

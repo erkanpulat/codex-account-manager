@@ -11,9 +11,12 @@ from codex_account_manager.core.single_instance import SingleInstance
 
 
 def main() -> int:
+    from codex_account_manager.core.windows_shell import delegate_gui_launch
+
+    if delegate_gui_launch():
+        return 0
     lock = SingleInstance()
     if not lock.acquire():
-        # Another instance already owns the tray.
         return 0
     try:
         from codex_account_manager.gui.app import run_gui

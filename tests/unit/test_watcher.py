@@ -31,9 +31,13 @@ def _health(alias, *, active=False, allowed=True, quota=QuotaState.AVAILABLE, se
 
 class _FakeContinuity:
     def __init__(self):
+        from unittest.mock import AsyncMock
+
         from codex_account_manager.continuity.automation import ContinuationSupervisor
 
         self.automation = ContinuationSupervisor()
+        self.automation.recover_pending = AsyncMock()
+        self._turn_baselines = {}
         self.continued: list[str] = []
 
     async def observe_work(self):
@@ -51,6 +55,26 @@ class _StubAccounts:
         return self._health
 
 
+async def test_health_finishes_before_pending_worker_launches(migrated_db):
+    from unittest.mock import AsyncMock
+
+    order = []
+    continuity = _FakeContinuity()
+
+    async def recover(_account):
+        order.append("recovery")
+
+    class Accounts:
+        async def all_health(self):
+            order.append("health")
+            return []
+
+    continuity.automation.recover_pending = AsyncMock(side_effect=recover)
+    watcher = Watcher(accounts=Accounts(), continuity=continuity)
+    await watcher.poll_once()
+    assert order == ["health", "recovery"]
+
+
 async def test_failover_continues_limited_conversation():
     health = [
         _health("ana", active=True, allowed=False, quota=QuotaState.LIMITED_WITH_RESET),
@@ -59,6 +83,25 @@ async def test_failover_continues_limited_conversation():
     continuity = _FakeContinuity()
     watcher = Watcher(
         accounts=_StubAccounts(health),
+        continuity=continuity,
+        policy=resolve_policy(SwitchPolicyKind.AVAILABILITY_FAILOVER),
+    )
+    await watcher.poll_once()
+    assert continuity.continued == ["hesap2"]
+
+
+async def test_recovery_error_does_not_suppress_independent_failover():
+    from unittest.mock import AsyncMock
+
+    continuity = _FakeContinuity()
+    continuity.automation.recover_pending = AsyncMock(side_effect=OSError("unreadable record"))
+    watcher = Watcher(
+        accounts=_StubAccounts(
+            [
+                _health("ana", active=True, allowed=False, quota=QuotaState.LIMITED_WITH_RESET),
+                _health("hesap2"),
+            ]
+        ),
         continuity=continuity,
         policy=resolve_policy(SwitchPolicyKind.AVAILABILITY_FAILOVER),
     )
@@ -129,6 +172,63 @@ async def test_automatic_failure_is_visible_and_redacted():
     assert "failed" in events[0].payload["detail"]
 
 
+async def test_deferred_switch_rechecks_on_next_poll_without_failure_backoff():
+    from codex_account_manager.core.errors import HandoffDeferredError
+
+    class WaitingContinuity(_FakeContinuity):
+        async def continue_on_limit(self, alias):
+            self.continued.append(alias)
+            if len(self.continued) == 1:
+                raise HandoffDeferredError("Work is still running.")
+
+    continuity = WaitingContinuity()
+    health = [
+        _health("limited", active=True, allowed=False, quota=QuotaState.LIMITED_WITH_RESET),
+        _health("ready"),
+    ]
+    watcher = Watcher(
+        accounts=_StubAccounts(health),
+        continuity=continuity,
+        policy=resolve_policy(SwitchPolicyKind.AVAILABILITY_FAILOVER),
+    )
+    events = []
+    unsubscribe = bus.subscribe("switch.deferred", events.append)
+    try:
+        await watcher.poll_once()
+        await watcher.poll_once()
+    finally:
+        unsubscribe()
+    assert len(events) == 1
+    assert continuity.continued == ["ready", "ready"]
+    assert watcher._retry_at == 0
+
+
+async def test_temporary_account_lock_does_not_cause_five_minute_backoff():
+    from codex_account_manager.core.errors import OperationBusyError
+
+    class BusyContinuity(_FakeContinuity):
+        async def continue_on_limit(self, alias):
+            self.continued.append(alias)
+            if len(self.continued) == 1:
+                raise OperationBusyError("Another operation is in progress.", stage="prepare")
+
+    continuity = BusyContinuity()
+    watcher = Watcher(
+        accounts=_StubAccounts(
+            [
+                _health("limited", active=True, allowed=False, quota=QuotaState.LIMITED_WITH_RESET),
+                _health("ready"),
+            ]
+        ),
+        continuity=continuity,
+        policy=resolve_policy(SwitchPolicyKind.AVAILABILITY_FAILOVER),
+    )
+    await watcher.poll_once()
+    assert watcher._retry_at == 0
+    await watcher.poll_once()
+    assert continuity.continued == ["ready", "ready"]
+
+
 async def test_new_install_defaults_to_automatic_and_sixty_seconds(migrated_db):
     continuity = _FakeContinuity()
     watcher = Watcher(
@@ -171,6 +271,7 @@ async def test_settings_event_wakes_monitor_without_waiting_old_interval(migrate
 
     from codex_account_manager.storage.repositories import SettingsRepository
 
+    await SettingsRepository().set("monitor_enabled", "true")
     seen = asyncio.Queue()
 
     class Accounts:
@@ -239,3 +340,26 @@ async def test_failed_automatic_switch_uses_backoff_until_another_target(monkeyp
     health[1] = _health("second")
     await watcher.poll_once()
     assert continuity.calls == ["first", "first", "second"]
+
+
+async def test_background_monitor_is_idle_when_explicitly_paused(migrated_db):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from codex_account_manager.storage.repositories import SettingsRepository
+
+    await SettingsRepository().set("monitor_enabled", "false")
+    watcher = Watcher(continuity=_FakeContinuity())
+    watcher.poll_once = AsyncMock(return_value=[])
+    task = asyncio.create_task(watcher.run())
+    try:
+        await asyncio.sleep(0.08)
+        watcher.poll_once.assert_not_called()
+        await SettingsRepository().set("monitor_enabled", "true")
+        bus.publish("monitor.settings_changed")
+        async with asyncio.timeout(2):
+            while not watcher.poll_once.called:
+                await asyncio.sleep(0.01)
+    finally:
+        watcher.stop()
+        await task

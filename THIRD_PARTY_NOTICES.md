@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-Codex Account Manager is licensed under the MIT License. It depends on the following
+QuotaCrew is licensed under the MIT License. It depends on the following
 open-source packages, each distributed under its own license:
 
 | Package | Purpose | License |
@@ -41,6 +41,6 @@ under its MIT license.
 
 ## Trademarks
 
-"OpenAI" and "Codex" are trademarks of OpenAI. Codex Account Manager is an
+"OpenAI" and "Codex" are trademarks of OpenAI. QuotaCrew is an
 independent, unofficial tool and is not affiliated with, sponsored by, or
 endorsed by OpenAI.

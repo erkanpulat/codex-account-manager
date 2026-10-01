@@ -1,10 +1,10 @@
 include LICENSE THIRD_PARTY_NOTICES.md README.md SECURITY.md CONTRIBUTING.md CHANGELOG.md
-recursive-include docs *.md *.png
+recursive-include docs *.md *.png *.svg
 recursive-include tests *.py
 recursive-include scripts *.py *.ps1
 recursive-include packaging *.md *.spec *.iss *.py *.txt
 
 include README.tr.md
-recursive-include packaging/assets *.ico *.png
+recursive-include packaging/assets *.ico *.png *.svg
 
 global-exclude auth.json *.auth.json *.token *.jwt .env .env.* *.db *.db-wal *.db-shm *.sqlite* *.log *.recovery.json *.auth-backup *.pyc

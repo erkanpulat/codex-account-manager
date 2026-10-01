@@ -1,108 +1,206 @@
-# Codex Hesap Yöneticisi
+<div align="center">
 
-**Codex hesabını değiştir. Aynı Desktop sohbetinde çalışmaya devam et.**
+<a href="https://github.com/erkanpulat/codex-quotacrew/releases/latest"><img src="packaging/assets/app.svg" width="88" height="88" alt="QuotaCrew — Windows indirme sayfasını aç" /></a>
 
-Hesaplarını ve kotalarını tek Windows uygulamasından yönet. Doğrulanmış bir kullanım limiti işi durdurduğunda, uygun hesaba otomatik geçiş yap ve aynı Desktop sohbetine devam isteği gönder.
+# QuotaCrew for Codex
 
-**[Windows için indir](https://github.com/erkanpulat/codex-account-manager/releases/latest)** · [Kurulum rehberi](#çalıştırma)
+**Hesap değişsin, iş devam etsin.**
 
-Windows · Türkçe / English · MIT · Kurulum paketi Python içerir
+Codex hesaplarınız, kalan kotalarınız ve devam eden işleriniz tek pencerede.
 
-*OpenAI ile bağlantılı veya onaylanmış bir ürün değildir. Birden fazla hesap kullanımı, geçerli hizmet koşulları kapsamında sizin sorumluluğunuzdadır.*
+**[Windows için indir](https://github.com/erkanpulat/codex-quotacrew/releases/latest)** · [Nasıl çalışır?](#devam-akışı) · [Kurulum](#kurulum) · [English](README.md)
 
-Desktop içinde devam bağlantısı deneyseldir ve Codex sürümüne bağlıdır. [Test edilen davranışlar ve sınırlar](docs/release-validation.md).
+Windows · Türkçe / English · Açık ve koyu tema · MIT
 
-[English](README.md) · [Güvenlik](SECURITY.md) · [Doğrulama raporu](docs/release-validation.md)
+</div>
 
-![Hesaplar, kullanım kotaları ve sıfırlama hakları](docs/images/overview-tr.png)
+[![QuotaCrew genel bakış ekranı: hesaplar, kalan kotalar ve yenilenme zamanları. İndirmek için tıklayın.](docs/images/overview-tr.png)](https://github.com/erkanpulat/codex-quotacrew/releases/latest)
 
-*Ekran görüntüleri örnek hesaplarla üretilmiştir; gerçek hesap bilgisi içermez.*
+*Gerçek uygulama ekranı; hesap bilgileri örnektir. Görsele tıklayarak indirme sayfasını açabilirsiniz.*
 
-## Tek uygulamada üç temel iş
+## Hesap değiştirmeye daha az, işinize daha çok zaman
 
-- **Hesaplarını ve kotalarını gör.** Kullanım limitlerini, yenilenme zamanlarını ve etkin hesabı yapılandırma dosyası düzenlemeden takip et.
-- **Kota dolduğunda hesap değiştir.** Otomatik, onaylı veya manuel geçiş seç; hesap kimliği doğrulanır, başarısız geçişte kurtarma denenir.
-- **Desktop içinde devam et.** Çalışırken izlenen ve limitle kesildiği doğrulanan aynı sohbete, Codex hedefi ve Desktop araçlarıyla devam isteği gönder. Yerel konuşmalarını projeye göre bul.
+Bir işin ortasında limit dolduğunda, hangi hesabın kullanılabilir olduğunu bulmak ve yarım kalan sohbete dönmek zaman alır. **QuotaCrew bu adımları tek yerde toplar:** kotaları karşılaştırın, hesap geçişini nasıl yapacağınızı seçin ve Codex Desktop ya da VS Code'daki uygun konuşmaların kaldığı yerden devam etmesini sağlayın.
 
-## Kullanım sıfırlama hakları
+- **Hesaplarınızı tek bakışta görün.** Beş saatlik ve haftalık kalan kota, yenilenme zamanı, etkin hesap ve sıfırlama hakları aynı tabloda.
+- **Geçişin kontrolü sizde olsun.** Hesabı kendiniz değiştirin, uygulama önerdiğinde onaylayın veya limit dolduğunda kullanılabilir bir hesaba otomatik geçişi açın.
+- **Yarım kalan işi aynı sohbette sürdürün.** Devam isteği, mevcut hedefi ve talimatları koruyarak kesilen konuşmaya gönderilir.
+- **İşleri ve sonuçlarını takip edin.** İşler, Etkinlik ve sistem tepsisi; izleme durumunu, devam tercihlerini ve doğrulanmış çalışan iş sayısını gösterir.
+- **Çalışma düzeninizi seçin.** Tepside çalıştırın, Windows ile başlatın veya belirlediğiniz koşul gerçekleştiğinde bilgisayarın kapanmasını planlayın.
 
-Planlı kota yenilenmeleri ve sıfırlama hakları hesap kartında ayrı gösterilir. Hak sayısına tıklayarak durumunu, kapsamını, verilme ve sona erme zamanlarını yerel saatinle görebilirsin. Alınamayan bilgi sıfır olarak gösterilmez. Uygulama hak tüketmez ve hak kimliklerini saklamaz; bir hakkı kullanmak için Codex'te ilgili hesabın kullanım ayarlarını açmalısın.
+## Devam akışı
 
-![Sıfırlama hakkının ayrıntıları](docs/images/reset-credits-tr.png)
+İzleme ve ilgili devam seçeneği açıkken QuotaCrew, kota nedeniyle kesilen işi algılar ve kullanılabilir hesabı kontrol eder. Geçişin ardından **aynı konuşmaya** bir devam isteği gönderir; yeni turun durumunu takip ederek sonucu İşler sayfasında gösterir.
 
-## Çalıştırma
+![Kota kesintisinden sonra limit kontrolü, hesap geçişi, aynı sohbete devam isteği ve sonuç takibi](docs/images/continuation-flow-tr.svg)
 
-Windows ve PATH üzerinde erişilebilir [Codex CLI](https://github.com/openai/codex) gerekir. [Sürümler](https://github.com/erkanpulat/codex-account-manager/releases/latest) sayfasından kurulum dosyasını veya taşınabilir ZIP paketini indirin. Kurulum masaüstü ve Başlat menüsü kısayolları sunar. Taşınabilir paketin tamamını çıkardıktan sonra `CodexAccountManager.exe` dosyasını açın. Bu paketler Python içerir; ayrıca Python kurmanız gerekmez. Dosyalar kod imzalı değildir; SHA-256 sağlama değerleri sürümle birlikte yayımlanır.
+Geçiş sırasında hesaplar ve konuşmalar yeniden kontrol edilir. Kontrol aralığına ve uygulamaların açılma süresine bağlı olarak bu işlem birkaç dakika sürebilir. Hedef, talimatlar ve bütçe korunur; kullanıcı onayı gereken adımlar sizin kontrolünüzde kalır. Bağımsız bir konuşmadaki sorun, diğer uygun konuşmaların devamını engellemez.
 
-Kaynaktan kurmak için Python 3.11–3.13 gerekir. PowerShell'de:
-
-```powershell
-git clone https://github.com/erkanpulat/codex-account-manager.git
-cd codex-account-manager
-./scripts/bootstrap.ps1
-.venv/Scripts/codex-account-manager.exe
-```
-
-Kurulum, masaüstüne ve Başlat menüsüne **Codex Account Manager** kısayollarını da ekler; sonraki açılışlarda terminal gerekmez. Proje klasörünü taşırsanız kısayolları güncellemek için kurulum betiğini yeniden çalıştırın.
-
-## İlk giriş
-
-1. **Hesaplarım → Hesap ekle** yolunu izleyin ve bir ad yazın.
-2. Eklediğiniz hesabı listeden seçip **Giriş yap** düğmesine basın.
-3. Açılan resmî Codex giriş akışını tamamlayın. Hesabınız otomatik olarak eşleştirilir.
-4. **Genel Bakış → Kullanımı yenile** düğmesiyle bilgileri alın.
-5. Başka bir hesap eklediğinizde **Bu hesaba geç** düğmesini kullanabilirsiniz.
+> **Devam özelliği hakkında:** Desktop ve IDE'de otomatik devam, 0.2.0 sürümünde deneyseldir ve kurulu Codex sürümünün bağlantı desteğine bağlıdır. Uygulama, devam gerektiren işi ve konuşma bağlantısını doğruladığında istek gönderir; onay veya kullanıcı yanıtı gerekiyorsa bunu bildirir.
 
 <details>
-<summary>Hesap ekleme penceresini gör</summary>
+<summary>Devam isteği ve bağlantıların teknik ayrıntıları</summary>
 
-![Örnek verilerle hesap ekleme penceresi](docs/images/add-account-tr.png)
+Gönderilen talimat, mevcut hedefi, izinleri ve bütçeyi koruyarak yarım kalan işe devam edilmesini; tamamlanan işin tekrarlanmamasını ve kullanıcı girdisi gerekiyorsa durulmasını ister. Bu, yeni bir model girdisidir ve kota tüketebilir.
+
+Desktop'ın yerel iletim kanalı nedeniyle mesajın üzerinde “ChatGPT tarafından başka bir görevden gönderildi” yazabilir. İstek mevcut konuşmaya gönderilir. **İşler → satır menüsü → Otomatik devam ayrıntıları** bölümünde hazırlık, gönderim ve gözlenen sonuç ayrı ayrı görülebilir.
+
+Desktop kendi yerel kanalını, IDE mevcut Codex oturumuna Windows IPC bağlantısını, desteklenen CLI konuşmaları ise App Server JSON-RPC bağlantısını kullanır. [Teknik akış ve hedef davranışı](docs/continuity.md).
 
 </details>
 
-Dil seçimi **Ayarlar → Dil** bölümündedir. Değişikliği uygulamak için sistem tepsisindeki menüden **Çıkış** seçeneğini kullanıp uygulamayı yeniden açın. Pencereyi kapatmak, sistem tepsisi kullanılabiliyorsa uygulamayı sonlandırmaz.
+## VS Code ile devam
 
-## Otomatik mi çalışır?
+Codex Desktop ve VS Code'u birlikte kullanabilirsiniz. VS Code tarafında **OpenAI Codex eklentisi** kurulu olmalı ve konuşma bu eklenti üzerinden açılmalıdır.
 
-**Desktop içinde devam bağlantısı deneyseldir.** Uygulama, doğrulanmış limit ve hesap geçişinden sonra aynı konuşmaya Desktop'ın kendi yerel araç kanalından devam isteği gönderir. Gerçek kota hatasıyla yapılan iki canlı testte otomatik hesap geçişi, aynı sohbette devam, yeni bir etkileşimli tarayıcı işlemi, Codex hedefinin tamamlanması ve yeni hesapta takibin sürmesi doğrulandı. Bu bağlantı Desktop sürümüne bağlı özel bir protokol kullanır. Bağlantı doğrulanamazsa durum bildirilir; konuşma ayrı bir arka plan oturumuna taşınmaz. Testlerin kapsamı ve sınırları [doğrulama raporundadır](docs/release-validation.md).
+![Solda Codex sohbeti ve devam isteği, sağda örnek kod bulunan temsili VS Code penceresi](docs/images/ide-continuation-example.png)
 
-**Varsayılan mod otomatiktir.** Ayarlar’dan manuel veya onaylı modu da seçebilirsiniz.
+*Devam akışını anlatan, yapay zekâ ile hazırlanmış temsili görsel; canlı test ekranı değildir.*
 
-| Mod | Davranış |
+1. Yerel projenizi ve Codex konuşmasını VS Code'da açın.
+2. QuotaCrew'de **Ayarlar → Konuşmalar → IDE'de devam** seçeneğini açın.
+3. Eklentinin yeni hesapla oturumunu yenilemesi gerekiyorsa **Geçişten sonra VS Code’u yenile** seçeneğini de açın. Bu seçenek, tek yerel VS Code penceresini kapatıp kesilen sohbetin çalışma klasörünü ve aynı konuşmayı yeniden açar.
+4. VS Code konuşma bağlantısını açmak için onay isterse **Aç** seçeneğini kullanın. Kaydetme ve diğer onay sorularını siz yanıtlayın.
+
+<details>
+<summary>Devam ayarları ve desteklenen ortamlar</summary>
+
+![Desktop ve IDE devamı ile VS Code yenileme ayarları](docs/images/continuation-tr.png)
+
+| Ortam | Kullanım |
 | --- | --- |
-| Manuel | Yalnızca seçtiğiniz hesaba geçer. |
-| Geçiş yapmadan önce sor | Etkin hesabın kotası dolduğunda uygun hesaba geçiş önerir; onayınızı bekler. |
-| Otomatik geçiş | Kota dolduğunda doğrulanmış ve kullanılabilir bir hesaba geçer; uygulama açıkken çalıştığı izlenen ve limitle kesilen konuşmayı yüklemeyi dener. |
+| Codex Desktop | Paketli Windows uygulamasında hesap geçişi ve sohbet devamı. |
+| Yerel VS Code | Codex eklentisinde sohbet devamı; otomatik yenileme tek yerel pencereyi destekler. |
+| CLI / App Server | Desteklenen yerel konuşmalarda devam. |
+| Cursor / Windsurf | Proje klasörünü açma ve yerel oturum bağlantısı; otomatik yenileme doğrulanmamıştır. |
+| Remote / WSL / bulut / başka cihaz | Yerel IDE devamı kapsamı dışındadır. |
 
-Kontrol, uygulama açıkken varsayılan olarak **60 saniyede bir** yapılır. **Ayarlar → Kontrol aralığı** bölümünden 30–3600 saniye arasında değiştirebilirsiniz; değişiklik hemen uygulanır. Hesap geçişi Codex Desktop’ı yeniden başlatır; önce çalışmalarınızı kaydedin.
+QuotaCrew bir VS Code eklentisi yüklemez. **Projeyi editörde aç** klasörü açar; **Devam desteğini kontrol et** mesaj göndermeden konuşmanın bağlantısını kontrol eder.
 
-**Yalnızca konuşmayı yüklemek veya yerel hedef notu kaydetmek model çalışması başlatmaz.** Otomatik devam açıkken uygulama, her kontrolünde çalışan konuşmanın kimliğini ve hedef durumunu kaydeder. Aynı tur kullanım limitiyle kesilir ve hesap geçişi başarılı olursa son turu ve hedefi yeniden doğrular. Desktop konuşmasına Desktop'ın kendi kanalından, CLI konuşmasına App Server üzerinden devam isteği gönderir. Hedefin amacı, bütçesi ve kullanımı korunur; araç izinleri otomatik onaylanmaz.
+</details>
 
-Çalışırken gözlemlenmeyen eski limit kayıtları devam ettirilmez. Konuşma veya hedef değişmişse işlem durur ve uygulama durumu bildirir. Kontrol aralığından daha kısa süren işler gözden kaçabilir. Devam isteğinden hemen önce kullanıcının yeni bir tur başlatmasıyla oluşabilecek yarış koşulu tamamen giderilmiş değildir. Ayrıntılar için [devam davranışına](docs/continuity.md) bakın.
+## Kurulum
 
-## Konuşmalar ve projeler
+[![İndir, tercihlerini seç ve hesabını ekle. Windows indirmelerini açmak için tıklayın.](docs/images/installation-tr.svg)](https://github.com/erkanpulat/codex-quotacrew/releases/latest)
 
-**Takip edilen işler** bölümünde, uygulama açıkken çalışan ve izlenen konuşmaları; hesap, tur durumu, Codex hedefinin durumu ve son kontrol zamanı ile görebilirsiniz. Listedeki bir hedefin güncel içeriğini seçerek Codex'ten okuyabilirsiniz. Bu bölüm son 24 saatte izlenen en fazla 50 kaydı gösterir; konuşma geçmişindeki her kayıt otomatik devam adayı değildir. Uygulama ilk açıldığında geçmişte kalmış limit hataları kendiliğinden devam ettirilmez.
+**Python pakete dahil · Node.js gerekmez · Mevcut Codex sohbetleriniz korunur**
 
-**Konuşmalar → Konuşmaları yenile** yerel Codex kayıtlarını yeniden okur. Tüm sayfalar okunur ve sonuçlar son etkinliğe göre sıralanır. Başlıkta veya klasörde arama yapabilir; proje ve kaynak filtrelerini birlikte kullanabilirsiniz. Proje kimliği varsa ona, yoksa çalışma klasörüne göre gruplama yapılır.
+1. **İndirin ve açın.** [Son sürüm](https://github.com/erkanpulat/codex-quotacrew/releases/latest) sayfasından `QuotaCrew-Setup-0.2.0.exe` dosyasını indirip kurun. Taşınabilir kullanım için ZIP'in tamamını bir klasöre çıkarın ve `QuotaCrew.exe` dosyasını açın.
+2. **Tercihlerinizi seçin.** İlk açılış yardımcısı izleme, hesap geçişi, sohbet devamı ve tepsi seçeneklerini tanıtır. Codex CLI eksikse onayınızla resmî Windows kurulumunu başlatır; mevcut CLI kurulumunuzu korur.
+3. **Hesaplarınızı ekleyin.** **Hesaplarım → Hesap ekle** bölümünde hesabınıza bir ad verin. Açılan terminal ve varsayılan tarayıcıda girişinizi tamamlayın; ardından diğer hesaplarınızı ekleyip kotaları yenileyin.
 
-Varsayılan **Ana konuşmalar** filtresi alt ajanları gizler. **Tüm kaynaklar** veya **Alt ajanlar** seçeneğiyle bu kayıtları da görebilirsiniz. `Ctrl+F` aramayı açar; `Ctrl+R` mevcut sayfayı yeniler.
+<details>
+<summary>İlk açılış ekranları ve varsayılan tercihler</summary>
 
-Kaynak sütunu konuşmanın Masaüstü/VS Code, CLI veya alt ajan kaydı olduğunu gösterir. Uzun klasör yollarının üzerine gelince tam metin görünür; sütun kenarlarını sürükleyerek genişletebilir, **Diğer işlemler → Konuşma ayrıntılarını göster** seçeneğinden tam metni açıp kopyalayabilirsiniz. Listenin üstünde okunan Codex klasörü ve kayıt sayısı bulunur. Yalnızca bulutta veya başka cihazda bulunan ve arşivlenmiş konuşmalar bu listede yer almaz.
+![Codex CLI kontrolü ve onaylı kurulum](docs/images/setup-cli-tr.png)
 
-![Örnek konuşmalar ve proje filtreleri](docs/images/conversations-tr.png)
+![İlk açılışta izleme, hesap geçişi ve sohbet devamı tercihleri](docs/images/setup-preferences-tr.png)
 
-## Hedef kaydet ne yapar?
+Yeni kurulumlarda izleme ve otomatik hesap geçişi seçilidir. Tercihlerinizi ilk açılışta ve daha sonra **Ayarlar**'da değiştirebilirsiniz. Hesap geçişi Codex Desktop'ı yeniden başlatır; çalışmalarınızı kaydedin.
 
-- **Codex hedefini göster**, seçtiğiniz konuşmadaki gerçek Codex hedefini okur; değiştirmez.
-- **Yerel hedef notu kaydet**, yalnızca bu uygulamada bir kayıt oluşturur. Codex’te hedef başlatmakla aynı işlem değildir; model çalışmaya başlamaz.
-- Konuşma daha sonra yüklenirken veya hesap geçişinde, Codex hedefin eksik olduğunu doğrularsa bu kayıt geri yükleme için kullanılabilir. Mevcut hedef değiştirilmez; duraklatılmış, tamamlanmış, engellenmiş ve bu uygulamada temizlenmiş kayıtlar yeniden etkinleştirilmez.
-- Yerel notu temizlemek Codex’teki hedefi silmez. Yerel kayıtlar **Ayarlar → Yerel Hedef Notları** altındadır.
+Pencere kapandıktan sonra izlemenin sürmesi için **Tepside çalışmaya devam et** seçeneğini açın. **Duraklat**, izlemeyi ve QuotaCrew'ün devam işlemlerini durdurur. Windows ile başlatma ayrı bir tercihtir. İptal edilen hesap girişini ilgili hesabın işlem menüsünden yeniden başlatabilirsiniz.
 
-## Sistem kontrolü ve gizlilik
+Windows paketleri kod imzalı değildir. `SHA256SUMS.txt`, sürüm dosyalarının doğrulama değerlerini içerir.
 
-**Ayarlar → Sistem Kontrolü** sayfasında Codex CLI, sürüm bilgisi, veri klasörü ve hesap durumu incelenir. Bir sonuca tıklayarak açıklamanın tamamını görebilirsiniz. Sürüm okunamıyorsa terminalde `codex --version` komutunu çalıştırın; CLI kurulumu veya PATH değiştiyse uygulamayı yeniden açın.
+</details>
 
-Hesap giriş bilgileri ve ayarlar yerel cihazda saklanır. Uygulama telemetri toplamaz; Codex ise giriş ve hesap bilgileri için OpenAI’a bağlanır. Tanılama dışa aktarımı yalnızca kontrol durumlarını, doğrulanan CLI sürümünü ve hesap sayısını içerir; hesap adları, dosya yolları, ham hata metinleri ve günlükler eklenmez. Depodaki ekran görüntüleri örnek hesaplarla üretilmiştir.
+## İşlerinizi gözden kaçırmayın
 
-Bu bağımsız, MIT lisanslı proje resmî bir OpenAI ürünü değildir. "OpenAI" ve "Codex" OpenAI'ın ticari markalarıdır. Hesap kotalarını artırmaz. Bu aracı hesaplarınızla kullanırken geçerli tüm hizmet koşullarına uymak sizin sorumluluğunuzdadır. Test edilen kapsam ve bilinen sınırlamalar [doğrulama raporunda](docs/release-validation.md) listelenir.
+**İşler** sayfasında konuşmaları, bağlı hesapları, çalışma durumlarını ve son kontrol zamanlarını birlikte görün. Bir işi seçerek Codex hedefini veya devam işleminin ayrıntılarını açın. **Etkinlik** sayfasında hesap geçişlerinin ve işlemlerin sonuçlarını takip edin.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/jobs-dark-tr.png">
+  <img src="docs/images/jobs-light-tr.png" alt="Çalışan, tamamlanan ve kota nedeniyle kesilen konuşmaların İşler sayfasında gösterimi">
+</picture>
+
+Yerel konuşmalarınızı proje, kaynak, başlık veya klasöre göre arayın; ilgili projeyi editörünüzde açın. `Ctrl+F` aramaya odaklanır, `Ctrl+R` sayfayı yeniler. **Takibi temizle**, QuotaCrew'ün takip kayıtlarını temizleyip izlemeyi duraklatır; Codex sohbet geçmişinizi silmez. Çalışan bir konuşmayı durdurmak için Codex'in **Durdur** düğmesini kullanın.
+
+**Otomatik Kapatma**, tüm kayıtlı hesapların limitinin dolması veya seçtiğiniz işin tamamlanması doğrulandığında iptal edilebilir bir geri sayım başlatır. Süreyi **1–1440 dakika** arasında seçebilirsiniz: 120 dakika iki saat, 180 dakika üç saattir. Özellik her oturumda sizin onayınızla açılır; açık uygulamalar zorla kapatılmaz. [Kapatma koşulları](docs/continuity.md#optional-windows-shutdown).
+
+<details>
+<summary>Konuşma geçmişi, hesap ekleme, sıfırlama hakları ve otomatik kapatma</summary>
+
+![Yerel konuşma geçmişi ve proje filtreleri](docs/images/conversations-tr.png)
+
+![Hesap ekleme penceresi](docs/images/add-account-tr.png)
+
+![Kullanılabilir sıfırlama hakkının ayrıntıları](docs/images/reset-credits-tr.png)
+
+![Otomatik kapatma koşulları ve dakika cinsinden geri sayım](docs/images/power-tr.png)
+
+Arşivlenmiş, yalnızca bulutta veya başka cihazda bulunan konuşmalar yerel listede gösterilmez. Codex hedefini okumak ve yerel hedef notu kaydetmek model çalıştırmaz. Güncel durum doğrulanamıyorsa veya izlenen başka bir iş sürüyorsa otomatik kapatma bekler; uygulamadan çıkmak kapatma planını iptal eder.
+
+</details>
+
+## Güncellemeler
+
+Kurulu uygulama, otomatik kontrol açıkken yeni kararlı sürümleri günde bir kontrol eder. **Ayarlar → Güncellemeler** bölümünden sürüm notlarını inceleyip **Güncelle**'ye basın: paket indirilir, boyutu ve SHA-256 değeri doğrulanır, veriler yedeklenir ve yalnızca QuotaCrew yeniden başlar. Hesap işlemleri veya bekleyen devam işlemleri varsa kurulum ertelenir.
+
+<details>
+<summary>Güncelleme ekranı ve paketlerin temiz tutulması</summary>
+
+![Kurulu sürüm, güncelleme kontrolü ve sürüm seçenekleri](docs/images/updates-tr.png)
+
+Eski indirmeler temizlenir, paket bağımlılıkları yenilenir ve en fazla iki güncelleme veritabanı yedeği tutulur. Taşınabilir ve kaynak kurulumları sürüm sayfasından elle güncellenir.
+
+Kullanıcılara güncelleme sunmak için daha yüksek numaralı kararlı bir GitHub Release ve Windows kurulum paketi yayımlanmalıdır. [Yayın adımları](packaging/README.md#publishing-updates).
+
+</details>
+
+## Veriler ve gizlilik
+
+Hesap profilleri, ayarlar ve takip kayıtları bilgisayarınızda saklanır. Mevcut Codex sohbetleriniz ortak `~/.codex` klasöründe kalır; kurulum, güncelleme ve uygulamayı kaldırma bu geçmişi silmez. Veri konumlarını **Sistem Kontrolü** bölümünden görebilirsiniz.
+
+QuotaCrew telemetri toplamaz veya giriş bilgilerinizi kendi sunucusuna göndermez. Codex, giriş ve hesap bilgileri için OpenAI'a bağlanır. Giriş dosyaları erişim izinleriyle korunur; şifrelenmez. Tanılama dışa aktarımı giriş bilgilerini, veritabanını ve konuşma metnini içermez. E-posta adreslerini arayüzde gizleyebilirsiniz. [Güvenlik ve veri koruma](SECURITY.md).
+
+## Geliştirme ve katkı
+
+QuotaCrew açık kaynaklıdır. Fikirlerinizi [Issues](https://github.com/erkanpulat/codex-quotacrew/issues) üzerinden paylaşın, geliştirmelerinizi [pull request](https://github.com/erkanpulat/codex-quotacrew/pulls) ile gönderin. İşinize yaradıysa [projeye yıldız vererek](https://github.com/erkanpulat/codex-quotacrew) destek olabilirsiniz.
+
+<details>
+<summary>Kaynaktan kurulum, CLI ve geliştirici kontrolleri</summary>
+
+Python 3.11–3.13 ve Git gerekir. PowerShell'de:
+
+```powershell
+git clone https://github.com/erkanpulat/codex-quotacrew.git
+cd codex-quotacrew
+./scripts/bootstrap.ps1
+.venv/Scripts/quotacrew.exe
+```
+
+Kurulum betiği masaüstü ve Başlat menüsü kısayollarını da oluşturur. Projeyi taşırsanız betiği yeni konumdan yeniden çalıştırın. Alternatif olarak etkin sanal ortamda:
+
+```powershell
+python -m pip install -e ".[gui]"
+codex-accounts init
+codex-accounts gui
+```
+
+CLI için `cx`, `codex-accounts` komutunun kısa adıdır. Tüm seçenekleri `codex-accounts --help` ile görebilirsiniz.
+
+```powershell
+codex-accounts profile add work
+codex-accounts profile login work
+codex-accounts accounts
+codex-accounts switch work
+codex-accounts doctor --bundle
+```
+
+Geliştirici kontrolleri:
+
+```powershell
+python -m pip install -e ".[gui,dev]"
+python -m ruff check src tests scripts
+python -m ruff format --check src tests scripts
+python -m mypy src
+python -m pytest -q
+```
+
+Testler hesap verilerini ve Codex bağlantılarını yalıtır; arayüz testleri ekran dışında çalışır. `python scripts/render_preview.py`, gerçek arayüzü örnek hesaplarla görselleştirir. CI; Windows/Linux ve Python 3.11–3.13 üzerinde kod, bağımlılık, güvenlik ve paket kontrollerini çalıştırır.
+
+</details>
+
+[Katkı ve mimari](CONTRIBUTING.md) · [Windows paketleme](packaging/README.md) · [IDE dahil test rehberi](docs/manual-testing.tr.md) · [Sorun giderme](docs/troubleshooting.md) · [Değişiklikler](CHANGELOG.md)
+
+MIT lisanslı bağımsız topluluk yazılımıdır; OpenAI ile bağlantılı veya OpenAI tarafından onaylanmış değildir. OpenAI ve Codex, OpenAI'ın ticari markalarıdır. QuotaCrew hesap kotalarını artırmaz; hesaplarınızı geçerli hizmet koşullarına uygun kullanın.

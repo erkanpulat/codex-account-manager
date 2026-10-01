@@ -28,7 +28,6 @@ class CheckResult:
 async def run_diagnostics() -> list[CheckResult]:
     results: list[CheckResult] = []
 
-    # Codex CLI present?
     try:
         codex = find_codex()
     except CodexNotFoundError:
@@ -37,7 +36,6 @@ async def run_diagnostics() -> list[CheckResult]:
         CheckResult("codex_cli", codex is not None, codex or "Codex CLI not found on PATH.")
     )
 
-    # Codex version (best-effort).
     if codex:
         try:
             version = await _codex_version(codex)
@@ -45,7 +43,6 @@ async def run_diagnostics() -> list[CheckResult]:
         except (OSError, ValueError, TimeoutError) as exc:
             results.append(CheckResult("codex_version", False, redact_text(str(exc))))
 
-    # Shared Codex home.
     shared = paths.shared_codex_home
     results.append(
         CheckResult(
@@ -63,7 +60,6 @@ async def run_diagnostics() -> list[CheckResult]:
         )
     )
 
-    # Database + migration state.
     results.append(
         CheckResult(
             "database",
@@ -89,7 +85,6 @@ async def run_diagnostics() -> list[CheckResult]:
     except Exception as exc:
         results.append(CheckResult("profiles", False, f"error: {exc}"))
 
-    # Desktop detection (Windows only).
     if sys.platform == "win32":
         from codex_account_manager.platform import windows
 

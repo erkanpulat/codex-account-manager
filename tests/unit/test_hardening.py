@@ -384,7 +384,7 @@ def test_packaged_and_protocol_versions_match_project_metadata():
     from codex_account_manager import __version__
 
     metadata = tomllib.loads(Path("pyproject.toml").read_text("utf-8"))
-    assert metadata["project"]["version"] == __version__ == "0.1.1"
+    assert metadata["project"]["version"] == __version__
     assert f'#define AppVersion "{__version__}"' in Path("packaging/installer.iss").read_text(
         "utf-8"
     )
@@ -429,3 +429,13 @@ def test_database_file_redirection_is_visible_even_when_parent_is_not_redirected
     paths = module._resolve.__wrapped__()
     assert paths.data_dir == folder
     assert paths.db_path == physical_db
+
+
+async def test_diagnostic_event_retention_preserves_recent_history(migrated_db, monkeypatch):
+    from codex_account_manager.storage.repositories import EventRepository
+
+    monkeypatch.setattr(EventRepository, "HISTORY_LIMIT", 3)
+    repository = EventRepository()
+    for index in range(7):
+        await repository.append("test", thread_id="t", payload={"sequence": index})
+    assert [item["payload"]["sequence"] for item in await repository.timeline("t")] == [4, 5, 6]

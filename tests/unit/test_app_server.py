@@ -1,7 +1,7 @@
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -23,6 +23,96 @@ async def test_timeout_cleans_pending_request(monkeypatch):
     with pytest.raises(AppServerError, match="timed out"):
         await server._request("account/read")
     assert server._pending == {}
+
+
+async def test_blocked_write_is_included_in_request_deadline(monkeypatch):
+    server = CodexAppServer("test", timeout=0.02)
+
+    async def blocked(_message):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(server, "_send", blocked)
+    with pytest.raises(AppServerError, match="timed out"):
+        await asyncio.wait_for(server._request("account/read"), 1)
+    assert not server._pending
+
+
+async def test_notification_write_has_a_deadline():
+    server = CodexAppServer("test", timeout=0.02)
+
+    async def blocked():
+        await asyncio.Event().wait()
+
+    server._proc = SimpleNamespace(stdin=SimpleNamespace(write=Mock(), drain=blocked))
+    with pytest.raises(AppServerError, match="write timed out"):
+        await asyncio.wait_for(server._notify("initialized"), 1)
+
+
+async def test_reader_reply_failure_wakes_requests_and_continuation(monkeypatch):
+    server = CodexAppServer("test")
+    stream = asyncio.StreamReader()
+    stream.feed_data(b'{"id":99,"method":"approval"}\n')
+    server._proc = SimpleNamespace(stdout=stream)
+    server._turn_events = asyncio.Queue(maxsize=1)
+    server._turn_events.put_nowait({"irrelevant": True})
+    pending = asyncio.get_running_loop().create_future()
+    server._pending[1] = pending
+    monkeypatch.setattr(server, "_send", AsyncMock(side_effect=BrokenPipeError("private")))
+    await asyncio.wait_for(server._read_loop(), 1)
+    with pytest.raises(AppServerError, match="closed unexpectedly"):
+        await pending
+    assert await server._turn_events.get() == {"closed": True}
+    assert not server._pending
+
+
+async def test_cancelled_close_kills_child_and_releases_transport():
+    server = CodexAppServer("test")
+    waiting = asyncio.Event()
+
+    async def wait():
+        waiting.set()
+        await asyncio.Event().wait()
+
+    process = SimpleNamespace(
+        returncode=None, stdin=None, wait=wait, kill=Mock(), _transport=Mock()
+    )
+    server._proc = process
+    closing = asyncio.create_task(server.aclose())
+    await waiting.wait()
+    closing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    process.kill.assert_called_once()
+    process._transport.close.assert_called_once()
+    assert server._proc is None
+
+
+@pytest.mark.parametrize("last_status", ["completed", "failed"])
+async def test_lost_completion_notification_is_recovered_read_only(monkeypatch, last_status):
+    import codex_account_manager.adapters.app_server as module
+
+    server = CodexAppServer("test")
+    monkeypatch.setattr(module, "CONTINUATION_POLL_SECONDS", 0.01)
+    sent = []
+
+    async def request(method, params):
+        sent.append(method)
+        if method == "thread/read":
+            return {"thread": {"id": "t", "status": {"type": "idle"}}}
+        assert method == "turn/start"
+        return {"turn": {"id": "owned", "status": "inProgress"}}
+
+    server._request = request
+    server.latest_turn = AsyncMock(
+        side_effect=[
+            {"id": "owned", "status": "inProgress"},
+            {"id": "owned", "status": last_status},
+        ]
+    )
+    result = await asyncio.wait_for(server.run_continuation_turn("t", "message"), 1)
+    assert result == {"id": "owned", "status": last_status}
+    assert sent == ["thread/read", "turn/start"]
+    assert server._turn_events is None
 
 
 async def test_reader_ignores_nonobjects_and_server_request_id_collision(monkeypatch):
@@ -326,7 +416,7 @@ async def test_desktop_and_unknown_conversations_are_not_taken_over(monkeypatch,
     server = CodexAppServer("test")
     request = AsyncMock(return_value={"thread": {"id": "t", "source": source}})
     monkeypatch.setattr(server, "_request", request)
-    with pytest.raises(AppServerError, match="Desktop tools"):
+    with pytest.raises(AppServerError):
         await server.resume_for_continuation("t")
     request.assert_awaited_once_with("thread/read", {"threadId": "t", "includeTurns": False})
 
@@ -396,3 +486,133 @@ async def test_account_reads_reset_credit_details_without_consuming(monkeypatch)
         "account/read",
         "account/rateLimits/read",
     ]
+
+
+@pytest.mark.parametrize("source", ["unknown", None, {"subAgent": "spawn"}, "future-client"])
+async def test_unsupported_source_never_requests_desktop_fallback(monkeypatch, source):
+    from codex_account_manager.core.errors import DesktopContinuationRequired
+
+    server = CodexAppServer("test")
+    monkeypatch.setattr(
+        server, "_request", AsyncMock(return_value={"thread": {"id": "t", "source": source}})
+    )
+    with pytest.raises(AppServerError) as error:
+        await server.require_headless_compatible("t")
+    assert not isinstance(error.value, DesktopContinuationRequired)
+
+
+async def test_source_read_rejects_wrong_thread_before_routing(monkeypatch):
+    server = CodexAppServer("test")
+    monkeypatch.setattr(
+        server,
+        "_request",
+        AsyncMock(return_value={"thread": {"id": "another", "source": "vscode"}}),
+    )
+    with pytest.raises(AppServerError, match="identity"):
+        await server.thread_source("expected")
+    with pytest.raises(AppServerError, match="identity"):
+        await server.is_desktop_thread("expected")
+
+
+@pytest.mark.parametrize(
+    "source,originator,expected",
+    [
+        ("vscode", "Codex Desktop", True),
+        ("vscode", "codex_vscode", False),
+        ("vscode", None, False),
+        ("cli", "Codex Desktop", False),
+    ],
+)
+async def test_desktop_route_requires_source_and_originator(
+    monkeypatch, source, originator, expected
+):
+    server = CodexAppServer("test")
+    monkeypatch.setattr(
+        server,
+        "_request",
+        AsyncMock(
+            return_value={"thread": {"id": "thread", "source": source, "originator": originator}}
+        ),
+    )
+    assert await server.is_desktop_thread("thread") is expected
+
+
+async def test_expired_profile_access_uses_one_official_refresh(monkeypatch):
+    server = CodexAppServer("profile", refresh_on_unauthorized=True)
+    request = AsyncMock(
+        side_effect=[
+            {"account": {"id": "owner", "email": "old@example.test"}},
+            AppServerError("HTTP 401 Unauthorized"),
+            {"account": {"id": "owner", "email": "new@example.test"}},
+            {"accountId": "owner", "ordinaryUsageAllowed": True},
+        ]
+    )
+    monkeypatch.setattr(server, "_request", request)
+    snapshot = await server.read_account()
+    assert snapshot.email == "new@example.test"
+    assert snapshot.email not in repr(snapshot)
+    assert request.await_args_list[2].args == ("account/read", {"refreshToken": True})
+    assert request.await_count == 4
+
+
+@pytest.mark.parametrize("failure", ["HTTP 429", "HTTP 503", "timed out", "connection reset"])
+async def test_temporary_failure_never_forces_token_rotation(monkeypatch, failure):
+    server = CodexAppServer("profile", refresh_on_unauthorized=True)
+    request = AsyncMock(side_effect=[{"account": {"id": "owner"}}, AppServerError(failure)])
+    monkeypatch.setattr(server, "_request", request)
+    with pytest.raises(AppServerError):
+        await server.read_account()
+    assert request.await_count == 2
+
+
+async def test_shared_home_never_forces_refresh_on_unauthorized(monkeypatch):
+    server = CodexAppServer("shared")
+    request = AsyncMock(side_effect=[{"account": {"id": "owner"}}, AppServerError("HTTP 401")])
+    monkeypatch.setattr(server, "_request", request)
+    with pytest.raises(AppServerError):
+        await server.read_account()
+    assert request.await_count == 2
+
+
+@pytest.mark.parametrize(
+    "failure", ["refresh_token_revoked", "refresh_token_reused", "invalid_grant", "HTTP 401"]
+)
+async def test_failed_refresh_is_bounded_and_requires_reauthentication(monkeypatch, failure):
+    from codex_account_manager.core.errors import SignInRequiredError
+
+    server = CodexAppServer("profile", refresh_on_unauthorized=True)
+    request = AsyncMock(
+        side_effect=[
+            {"account": {"id": "owner"}},
+            AppServerError("HTTP 401"),
+            AppServerError(failure),
+        ]
+    )
+    monkeypatch.setattr(server, "_request", request)
+    with pytest.raises(SignInRequiredError):
+        await server.read_account()
+    assert request.await_count == 3
+
+
+async def test_signed_out_account_does_not_request_quota(monkeypatch):
+    from codex_account_manager.core.errors import SignedOutError
+
+    server = CodexAppServer("profile")
+    request = AsyncMock(return_value={"account": None})
+    monkeypatch.setattr(server, "_request", request)
+    with pytest.raises(SignedOutError):
+        await server.read_account()
+    request.assert_awaited_once()
+
+
+@pytest.mark.parametrize("response", [{}, {"account": []}, {"account": "unknown"}])
+async def test_malformed_account_is_not_treated_as_signed_out(monkeypatch, response):
+    from codex_account_manager.core.errors import SignedOutError
+
+    server = CodexAppServer("shared")
+    request = AsyncMock(return_value=response)
+    monkeypatch.setattr(server, "_request", request)
+    with pytest.raises(AppServerError, match="invalid account response") as raised:
+        await server.read_account()
+    assert not isinstance(raised.value, SignedOutError)
+    request.assert_awaited_once()

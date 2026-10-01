@@ -1,6 +1,6 @@
-# Contributing to Codex Account Manager
+# Contributing to QuotaCrew
 
-Thanks for your interest in improving Codex Account Manager. This guide keeps changes
+Thanks for your interest in improving QuotaCrew. This guide keeps changes
 consistent and safe.
 
 ## Development setup
@@ -23,6 +23,8 @@ Requires Python 3.11–3.13 and the OpenAI Codex CLI on `PATH` for the live path
 ```
 
 All checks must pass. CI also runs dependency auditing, secret scanning and Windows package startup verification.
+
+For live Windows acceptance tests, including IDE continuation, use the [manual test checklist (Turkish)](docs/manual-testing.tr.md). Record live results separately from fake-adapter test results.
 
 ## Architecture rules
 
@@ -82,9 +84,10 @@ The account-operation file lock is distinct from the tray singleton. It serializ
 ### Finding the code
 
 Each desktop screen has its own module under `gui`: `overview.py`, `conversations.py`,
-`accounts.py`, `goals.py`, `diagnostics.py`, `settings.py`, and `about.py`.
-`main_window.py` owns navigation and the system tray; `view_base.py` and `widgets.py`
-provide shared UI elements. Screen widgets call services rather than writing credentials.
+`accounts.py`, `activity.py`, `goals.py`, `diagnostics.py`, `settings.py`, `power.py`, and `about.py`.
+`main_window.py` owns navigation and the system tray; `account_table.py` renders the
+same account table in Overview and My accounts. `view_base.py` and `widgets.py`
+provide the other shared UI elements. Screen widgets call services rather than writing credentials.
 
 The top-level `src` directory contains application code, `tests` contains isolated
 unit/integration checks, `docs` explains behavior, `scripts` contains development tools,
@@ -99,7 +102,7 @@ A dedicated reader matches replies by ID. Unexpected non-object JSON is ignored,
 
 Account reads prefer the `codex` entry in `rateLimitsByLimitId`, with the legacy `rateLimits` view as fallback. Unknown fields remain unknown. A bound identity must match before credentials are activated.
 
-`thread/resume` loads a stored conversation for later turns; it does not send `turn/start`. Goal endpoints vary by Codex version. Account Manager checks their result when used and treats an unavailable native goal read as unverified. It never advertises an unprobed write method as a detected capability.
+`thread/resume` loads a stored conversation for later turns; it does not send `turn/start`. Goal endpoints vary by Codex version. QuotaCrew checks their result when used and treats an unavailable native goal read as unverified. It never advertises an unprobed write method as a detected capability.
 
 Reference: [official Codex App Server documentation](https://developers.openai.com/codex/app-server/).
 
@@ -111,7 +114,13 @@ CLI continuation uses a separate, long-lived connection with experimental APIs e
 ## Interface maintenance
 
 English and Turkish messages live in `gui/i18n.py`. Keep Qt work on the main
-thread and use the shared widgets, spacing and icon helpers. Run
+thread and use the shared widgets, spacing and icon helpers. `view_base.py` owns
+page layouts, fitted tables, table cells, setting rows and empty states;
+`widgets.py` owns account rows, elided labels, usage bars, status pills and controls.
+Colors and icons belong in `design.py`; shared control styles belong in `theme.py`.
+Reuse these components instead of duplicating page-specific styles. Verify light
+and dark themes at 1040 × 700 and 1480 × 960, including long labels and empty states.
+Run
 `python scripts/render_preview.py` to regenerate actual-widget screenshots with
 synthetic profiles; never use real accounts in documentation images.
 `python scripts/build_icons.py` generates the Windows icon sizes.

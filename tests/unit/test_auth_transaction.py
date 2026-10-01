@@ -132,3 +132,40 @@ def test_legacy_recovery_snapshot_still_restores_credentials(tmp_paths):
     assert tx.recover()
     assert store.read_active() == b"original"
     assert desktop.stopped == 1
+
+
+async def test_rollback_preserves_credentials_rotated_during_desktop_shutdown(tmp_paths):
+    store = FileCredentialStore(shared_home=tmp_paths.shared_codex_home)
+    store.write_active_atomic(b"before-shutdown")
+
+    class RotatingDesktop(FakeDesktop):
+        def stop(self):
+            super().stop()
+            if self.stopped == 1:
+                store.write_active_atomic(b"rotated-before-exit")
+
+    async def wrong_identity(_home):
+        return "wrong-account"
+
+    tx = AuthTransaction(
+        credential_store=store, desktop=RotatingDesktop(), verify_account=wrong_identity
+    )
+    with pytest.raises(TransactionError):
+        await tx.switch(_profile(tmp_paths))
+    assert store.read_active() == b"rotated-before-exit"
+
+
+async def test_verified_target_retains_rotated_credentials_for_next_switch(tmp_paths):
+    store = FileCredentialStore(shared_home=tmp_paths.shared_codex_home)
+    store.write_active_atomic(b"old")
+    profile = _profile(tmp_paths)
+
+    async def rotating_verify(_home):
+        store.write_active_atomic(b"verified-new-generation")
+        return profile.bound_account_id
+
+    tx = AuthTransaction(
+        credential_store=store, desktop=FakeDesktop(), verify_account=rotating_verify
+    )
+    assert (await tx.switch(profile)).success
+    assert store.profile_auth_path(profile.codex_home).read_bytes() == b"verified-new-generation"

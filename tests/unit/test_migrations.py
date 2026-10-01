@@ -28,6 +28,7 @@ async def test_migrate_is_idempotent(tmp_paths):
 async def test_observed_work_migration_accepts_earlier_local_schema(tmp_paths):
     await migrate()
     with sqlite3.connect(tmp_paths.db_path) as con:
+        con.execute("DROP TABLE pending_continuations")
         con.execute("DROP TABLE observed_work")
         con.execute(
             """CREATE TABLE observed_work (

@@ -22,7 +22,7 @@ def tmp_paths(tmp_path):
     singleton = paths_mod.paths
 
     # Include Unicode + spaces to exercise Windows-style paths.
-    root = tmp_path / "Çalışmalar" / "Codex Account Manager"
+    root = tmp_path / "Çalışmalar" / "QuotaCrew"
     data = root / "data"
     shared = root / ".codex"
     new_fields = {
@@ -63,3 +63,47 @@ def block_live_native_desktop(monkeypatch):
         raise RuntimeError("Tests must not connect to a live Desktop.")
 
     monkeypatch.setattr(native_desktop, "_exchange", blocked)
+
+
+@pytest.fixture(autouse=True)
+def block_live_shutdown(monkeypatch):
+    from codex_account_manager.platform import power
+
+    def blocked():
+        raise AssertionError("Tests must never shut down the computer.")
+
+    monkeypatch.setattr(power, "shutdown_windows", blocked)
+
+
+@pytest.fixture(autouse=True)
+def block_live_ide(monkeypatch):
+    from codex_account_manager.adapters import native_ide
+    from codex_account_manager.platform import ide_session
+
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("Tests must never send to a live IDE.")
+
+    monkeypatch.setattr(native_ide, "_exchange", blocked)
+    monkeypatch.setattr(ide_session, "request_close", blocked)
+    monkeypatch.setattr(ide_session, "launch_from_explorer", blocked)
+
+
+@pytest.fixture(autouse=True)
+def block_live_updates(monkeypatch):
+    from codex_account_manager import updates
+
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("Tests must not download or install real updates.")
+
+    monkeypatch.setattr(updates, "_open", blocked)
+    monkeypatch.setattr(updates, "launch_from_explorer", blocked)
+
+
+@pytest.fixture(autouse=True)
+def block_live_cli_setup(monkeypatch):
+    from codex_account_manager.codex import setup
+
+    def blocked(*_args, **_kwargs):
+        raise AssertionError("Tests must not install Codex CLI on the real computer.")
+
+    monkeypatch.setattr(setup.urllib.request, "build_opener", blocked)

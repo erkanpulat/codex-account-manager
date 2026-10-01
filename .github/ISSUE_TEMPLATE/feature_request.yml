@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an idea for Codex Account Manager
+description: Suggest an idea for QuotaCrew
 labels: [enhancement]
 body:
   - type: textarea

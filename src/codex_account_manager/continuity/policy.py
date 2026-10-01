@@ -28,7 +28,7 @@ class SwitchPolicy:
 
     @staticmethod
     def _is_available(h: ProfileHealth) -> bool:
-        if h.error is not None:
+        if h.error is not None or h.stale or h.reauth_required:
             return False
         if h.account_match is not True:
             return False

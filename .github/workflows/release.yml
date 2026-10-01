@@ -1,0 +1,102 @@
+name: Publish release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version already set in the selected source, for example 0.2.0'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    permissions:
+      contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -e ".[gui,dev]" pyinstaller pip-audit bandit
+      - name: Verify updater repository matches publication target
+        run: python -c "import os; from codex_account_manager.updates import REPOSITORY; assert os.environ['GITHUB_REPOSITORY'] == REPOSITORY, 'Update the trusted repository before publishing from a renamed repository'"
+      - name: Verify release version
+        shell: pwsh
+        run: |
+          if ($env:RELEASE_VERSION -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Invalid release version' }
+          python -c "import os,tomllib; from pathlib import Path; from codex_account_manager import __version__; v=os.environ['RELEASE_VERSION']; assert __version__==v==tomllib.loads(Path('pyproject.toml').read_text())['project']['version']; assert ('#define AppVersion '+chr(34)+v+chr(34)) in Path('packaging/installer.iss').read_text()"
+          if ($LASTEXITCODE -ne 0) { throw 'Version mismatch' }
+      - run: python -m ruff check src tests scripts
+      - run: python -m ruff format --check src tests scripts
+      - run: python -m mypy src
+      - run: python -m pytest -q
+      - run: python -m pip check
+      - run: python -m pip_audit --local --skip-editable
+      - run: python -m bandit -r src -ll
+      - name: Scan release source for secrets
+        shell: pwsh
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          if ($LASTEXITCODE -ne 0) { throw 'Secret scanner setup failed' }
+          & "$(go env GOPATH)/bin/gitleaks.exe" git . --redact --no-banner --log-opts="--all"
+          if ($LASTEXITCODE -ne 0) { throw 'Secret scan failed' }
+      - run: python -m PyInstaller --clean --noconfirm packaging/QuotaCrew.spec
+      - run: python scripts/verify_windows_package.py
+      - run: python scripts/verify_windows_package.py --first-run
+      - name: Build installer
+        shell: pwsh
+        run: |
+          & "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe" packaging/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - run: python scripts/verify_windows_installer.py
+      - name: Build portable archive
+        shell: pwsh
+        run: |
+          Copy-Item packaging/WINDOWS-README.md -Destination dist/QuotaCrew/README.md
+          Copy-Item LICENSE,THIRD_PARTY_NOTICES.md -Destination dist/QuotaCrew
+          Compress-Archive -Path dist/QuotaCrew/* -DestinationPath "installer/Output/QuotaCrew-portable-$env:RELEASE_VERSION.zip"
+      - name: Publish verified installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          $name = "QuotaCrew-Setup-$env:RELEASE_VERSION.exe"
+          $asset = Join-Path 'installer/Output' $name
+          $portable = "installer/Output/QuotaCrew-portable-$env:RELEASE_VERSION.zip"
+          $digest = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant()
+          $portableDigest = (Get-FileHash -LiteralPath $portable -Algorithm SHA256).Hash.ToLowerInvariant()
+          @("$digest  $name", "$portableDigest  $(Split-Path -Leaf $portable)") | Set-Content -LiteralPath 'installer/Output/SHA256SUMS.txt' -Encoding utf8NoBOM
+          $existing = gh release view $tag --json isDraft --jq '.isDraft' 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            if ($existing -ne 'true') { throw 'This version is already published' }
+            gh release edit $tag --target $env:GITHUB_SHA
+          } else {
+            gh release create $tag --draft --target $env:GITHUB_SHA --title $tag --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release preparation failed' }
+          gh release upload $tag $asset $portable 'installer/Output/SHA256SUMS.txt' --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Asset upload failed; release remains a draft' }
+          $releaseId = gh release view $tag --json databaseId --jq '.databaseId'
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release lookup failed' }
+          $release = gh api "repos/$env:GH_REPO/releases/$releaseId" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $release.draft) { throw 'Draft verification failed' }
+          foreach ($file in @($asset, $portable, 'installer/Output/SHA256SUMS.txt')) {
+            $fileName = Split-Path -Leaf $file
+            $expected = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            $uploaded = @($release.assets | Where-Object name -eq $fileName)
+            if ($uploaded.Count -ne 1 -or $uploaded[0].digest -ne "sha256:$expected" -or $uploaded[0].size -ne (Get-Item -LiteralPath $file).Length) { throw 'Uploaded asset mismatch; release remains a draft' }
+          }
+          gh release edit $tag --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed' }

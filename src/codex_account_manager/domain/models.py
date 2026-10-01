@@ -1,4 +1,4 @@
-"""Domain models for Codex Account Manager.
+"""Domain models for QuotaCrew.
 
 Pydantic models for persisted/serialised entities and plain dataclasses for
 in-memory snapshots read from the Codex App Server. None of these ever hold
@@ -7,7 +7,7 @@ credential material.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -24,7 +24,6 @@ def _uuid() -> str:
     return str(uuid4())
 
 
-# Profiles / accounts
 class Profile(BaseModel):
     id: str = Field(default_factory=_uuid)
     alias: str
@@ -53,7 +52,7 @@ class AccountSnapshot:
 
     account_id: str | None
     account_type: str | None
-    email: str | None
+    email: str | None = field(repr=False)
     plan_type: str | None
     ordinary_usage_allowed: bool | None
     primary_used_percent: float | None
@@ -86,9 +85,13 @@ class ProfileHealth:
     last_checked_at: datetime | None
     error: str | None = None
     reset_credits: ResetCredits | None = None
+    email: str | None = field(default=None, repr=False)
+    stale: bool = False
+    reauth_required: bool = False
+    primary_window_minutes: int | None = None
+    secondary_window_minutes: int | None = None
 
 
-# Threads / goals / continuity
 @dataclass(frozen=True)
 class ThreadInfo:
     """A thread as reported by the App Server ``thread/list``."""
@@ -110,7 +113,7 @@ class ThreadInfo:
 
 
 class ThreadRecord(BaseModel):
-    """Account Manager's tracked continuity record for a thread."""
+    """QuotaCrew's tracked continuity record for a thread."""
 
     id: str
     profile_id: str | None = None
@@ -128,7 +131,7 @@ class ThreadRecord(BaseModel):
 
 
 class GoalCheckpoint(BaseModel):
-    """Account Manager's own goal checkpoint, independent of native Codex goal.
+    """QuotaCrew's own goal checkpoint, independent of native Codex goal.
 
     ``revision`` increments on every meaningful change so we can distinguish a
     goal the user intentionally cleared from one lost during a handoff.

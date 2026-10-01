@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Continue from the same conversation</title>
+  <desc id="desc">Verify the limit, switch accounts, send a continuation request in the same conversation and check the new turn. An illustration of the experimental flow.</desc>
+  <defs>
+    <linearGradient id="bg" x2="1" y2="1"><stop stop-color="#101b2a"/><stop offset="1" stop-color="#0c1118"/></linearGradient>
+    <linearGradient id="bubble" x2="1" y2="1"><stop stop-color="#214f89"/><stop offset="1" stop-color="#193c69"/></linearGradient>
+  </defs>
+  <rect width="1200" height="630" rx="24" fill="url(#bg)"/>
+  <g font-family="Segoe UI,Arial,sans-serif">
+    <text x="52" y="62" fill="#5ee5be" font-size="14" letter-spacing="2">QUOTACREW FOR CODEX</text>
+    <text x="52" y="110" fill="#f0f4fa" font-size="34" font-weight="600">Same conversation. Keep the work moving.</text>
+    <text x="52" y="144" fill="#a7b6c9" font-size="18">After a verified quota interruption, with the existing goal and instructions.</text>
+    <g fill="#172332" stroke="#304255">
+      <rect x="52" y="182" width="254" height="66" rx="12"/>
+      <rect x="330" y="182" width="254" height="66" rx="12"/>
+      <rect x="608" y="182" width="254" height="66" rx="12"/>
+      <rect x="886" y="182" width="262" height="66" rx="12"/>
+    </g>
+    <g fill="#e1e9f4" font-size="17">
+      <text x="72" y="222">01 · Verify the limit</text>
+      <text x="350" y="222">02 · Switch accounts</text>
+      <text x="628" y="222">03 · Request continuation</text>
+      <text x="906" y="222">04 · Check the new turn</text>
+    </g>
+    <rect x="52" y="280" width="1096" height="268" rx="18" fill="#121b27" stroke="#2b3c51"/>
+    <text x="80" y="318" fill="#a7b6c9" font-size="15">SAME CONVERSATION · ILLUSTRATION</text>
+    <text x="526" y="348" fill="#a7b6c9" font-size="14">Sent by ChatGPT from another task</text>
+    <rect x="310" y="364" width="810" height="155" rx="19" fill="url(#bubble)"/>
+    <g fill="#f5f8ff" font-size="17">
+      <text x="335" y="397">Continue the previously requested unfinished work from its current state.</text>
+      <text x="335" y="425">Follow the existing goal, user instructions, permissions and budget. Do not</text>
+      <text x="335" y="453">redo completed work. If the work is complete or needs user input, report that</text>
+      <text x="335" y="481">and stop.</text>
+    </g>
+    <text x="52" y="583" fill="#a7b6c9" font-size="15">Experimental · Enable monitoring and continuation. Submission does not mean the work is complete.</text>
+  </g>
+</svg>

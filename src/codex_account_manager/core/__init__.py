@@ -1,4 +1,4 @@
-"""Core, UI-agnostic foundation for Codex Account Manager.
+"""Core, UI-agnostic foundation for QuotaCrew.
 
 This package holds cross-cutting concerns used by every other layer:
 paths, settings, structured logging with secret redaction, the single-instance

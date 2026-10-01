@@ -33,13 +33,13 @@ def main() -> None:
         except FileNotFoundError:
             return None
 
-    installers = list(Path("installer/Output").glob("CodexAccountManager-Setup-*.exe"))
+    installers = list(Path("installer/Output").glob("QuotaCrew-Setup-*.exe"))
     if len(installers) != 1:
         raise RuntimeError("Expected exactly one freshly built installer.")
     shell = win32com.client.Dispatch("WScript.Shell")
-    desktop_link = Path(shell.SpecialFolders("Desktop")) / "Codex Account Manager.lnk"
-    menu_dir = Path(shell.SpecialFolders("Programs")) / "Codex Account Manager"
-    menu_link = menu_dir / "Codex Account Manager.lnk"
+    desktop_link = Path(shell.SpecialFolders("Desktop")) / "QuotaCrew.lnk"
+    menu_dir = Path(shell.SpecialFolders("Programs")) / "QuotaCrew"
+    menu_link = menu_dir / "QuotaCrew.lnk"
     data_dir = Path(os.environ["LOCALAPPDATA"]) / "CodexAccountManager"
     if (
         data_dir.exists()
@@ -72,14 +72,14 @@ def main() -> None:
                 check=True,
                 timeout=180,
             )
-            executable = destination / "CodexAccountManager.exe"
+            executable = destination / "QuotaCrew.exe"
             uninstaller = destination / "unins000.exe"
             if not executable.is_file() or not uninstaller.is_file():
                 raise RuntimeError("Installed application or uninstaller is missing.")
             for link, target in (
                 (desktop_link, executable),
                 (menu_link, executable),
-                (menu_dir / "Uninstall Codex Account Manager.lnk", uninstaller),
+                (menu_dir / "Uninstall QuotaCrew.lnk", uninstaller),
             ):
                 if not link.is_file():
                     raise RuntimeError(
@@ -94,12 +94,51 @@ def main() -> None:
             subprocess.run([str(destination / "cli/cx.exe"), "--help"], check=True, timeout=60)
             if sentinel.read_bytes() != expected:
                 raise RuntimeError("Installation modified existing user data.")
+            legacy_executable = destination / "CodexAccountManager.exe"
+            legacy_executable.write_bytes(b"synthetic legacy executable; never executed")
+            legacy_menu = menu_dir.with_name("Codex Account Manager")
+            legacy_menu.mkdir()
+            legacy_links = (
+                desktop_link.with_name("Codex Account Manager.lnk"),
+                menu_dir.parent / "Codex Account Manager.lnk",
+                legacy_menu / "Codex Account Manager.lnk",
+                legacy_menu / "Uninstall Codex Account Manager.lnk",
+            )
+            for link in legacy_links:
+                shortcut = shell.CreateShortcut(str(link))
+                shortcut.TargetPath = str(legacy_executable)
+                shortcut.Save()
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Run",
+                0,
+                winreg.KEY_SET_VALUE,
+            ) as key:
+                winreg.SetValueEx(
+                    key, "CodexAccountManager", 0, winreg.REG_SZ, f'"{legacy_executable}"'
+                )
+            subprocess.run(
+                [str(installers[0].resolve()), *flags, f"/DIR={destination}", "/TASKS="],
+                check=True,
+                timeout=180,
+            )
+            if (
+                legacy_executable.exists()
+                or any(link.exists() for link in legacy_links)
+                or legacy_menu.exists()
+                or not executable.is_file()
+                or startup_command() != f'"{executable}"'
+                or sentinel.read_bytes() != expected
+            ):
+                raise RuntimeError(
+                    "QuotaCrew migration did not preserve data and startup registration."
+                )
         finally:
             uninstaller = destination / "unins000.exe"
             if uninstaller.is_file():
                 subprocess.run([str(uninstaller), *flags], check=True, timeout=180)
         if (
-            (destination / "CodexAccountManager.exe").exists()
+            (destination / "QuotaCrew.exe").exists()
             or desktop_link.exists()
             or menu_dir.exists()
             or startup_command() is not None

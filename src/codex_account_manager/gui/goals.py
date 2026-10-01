@@ -11,13 +11,20 @@ from PySide6.QtWidgets import (
 )
 
 from codex_account_manager.gui.async_runner import AsyncRunner
-from codex_account_manager.gui.design import DARK, make_icon
+from codex_account_manager.gui.design import DARK, set_button_icon
 from codex_account_manager.gui.dialogs import choose_item, prompt_text
 from codex_account_manager.gui.i18n import (
     state_label,
     tr,
 )
-from codex_account_manager.gui.view_base import BaseView, table_widget, tooltip_item, view_header
+from codex_account_manager.gui.view_base import (
+    BaseView,
+    SortableItem,
+    page_panel,
+    table_widget,
+    tooltip_item,
+    view_header,
+)
 
 
 class GoalsView(BaseView):
@@ -25,15 +32,19 @@ class GoalsView(BaseView):
         super().__init__(palette)
         self.runner = runner
         refresh = QPushButton(tr(" Refresh"))
-        refresh.setIcon(make_icon("refresh", palette.text))
+        set_button_icon(refresh, "refresh", palette.text)
         refresh.clicked.connect(self.refresh)
         self._root.addWidget(
             view_header(tr("Goals"), tr("Saved objectives and their continuity status"), refresh)
         )
+        panel, panel_layout = page_panel()
+        self._root.addWidget(panel, 1)
         self.table = table_widget(
             [tr("Thread"), tr("Objective"), tr("Status"), tr("Native"), tr("Rev")]
         )
-        self._root.addWidget(self.table, 1)
+        self.table.fit_columns((120, 280, 120, 130, 80), (1, 5, 2, 2, 1))
+        self.table.setSortingEnabled(True)
+        panel_layout.addWidget(self.table, 1)
         actions = QHBoxLayout()
         for title, handler in (
             (tr("Save objective"), self._set_goal),
@@ -43,7 +54,7 @@ class GoalsView(BaseView):
             button.clicked.connect(handler)
             actions.addWidget(button)
         actions.addStretch()
-        self._root.addLayout(actions)
+        panel_layout.addLayout(actions)
 
     def refresh(self) -> None:
         from codex_account_manager.storage.repositories import GoalRepository
@@ -113,6 +124,7 @@ class GoalsView(BaseView):
             )
 
     def _render(self, goals) -> None:
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(goals))
         for row, g in enumerate(goals):
             item = QTableWidgetItem(g.thread_id[:12])
@@ -132,4 +144,5 @@ class GoalsView(BaseView):
                     else tr("missing")
                 ),
             )
-            self.table.setItem(row, 4, QTableWidgetItem(str(g.revision)))
+            self.table.setItem(row, 4, SortableItem(str(g.revision), g.revision))
+        self.table.setSortingEnabled(True)

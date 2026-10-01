@@ -13,10 +13,12 @@ import re
 from typing import Any
 
 _MASK = "***REDACTED***"
+_EMAIL_RE = re.compile(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 
 # Keys whose values are always masked, regardless of content.
 _SENSITIVE_KEYS = frozenset(
     {
+        "email",
         "access_token",
         "accesstoken",
         "id_token",
@@ -60,6 +62,7 @@ def redact_text(value: str) -> str:
     result = _KEY_RE.sub(_MASK, result)
     result = _BEARER_RE.sub(_MASK, result)
     result = _LONG_SECRET_RE.sub(_MASK, result)
+    result = _EMAIL_RE.sub(_MASK, result)
     return result
 
 

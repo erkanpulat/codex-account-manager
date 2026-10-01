@@ -36,7 +36,6 @@ class Migration:
     apply: MigrationFn
 
 
-# Migration steps
 async def _create_profiles(db: aiosqlite.Connection) -> None:
     """Account identity and managed profile schema."""
     await db.execute(
@@ -74,7 +73,7 @@ async def _create_settings(db: aiosqlite.Connection) -> None:
 
 
 async def _create_conversations(db: aiosqlite.Connection) -> None:
-    """Threads, goals, handoffs and an append-only event log."""
+    """Threads, goals, handoffs and diagnostic event history."""
     await db.execute(
         """
         CREATE TABLE IF NOT EXISTS threads (
@@ -218,12 +217,33 @@ async def _normalize_observed_work(db: aiosqlite.Connection) -> None:
     await db.execute("DROP TABLE observed_work_legacy")
 
 
+async def _work_verification(db: aiosqlite.Connection) -> None:
+    await db.execute("ALTER TABLE observed_work ADD COLUMN verified INTEGER NOT NULL DEFAULT 0")
+
+
+async def _pending_continuations(db: aiosqlite.Connection) -> None:
+    await db.execute("""
+        CREATE TABLE pending_continuations (
+            thread_id TEXT NOT NULL,
+            turn_id TEXT NOT NULL,
+            account_id TEXT NOT NULL,
+            goal_signature TEXT,
+            desktop INTEGER NOT NULL,
+            owner_id TEXT,
+            created_at REAL NOT NULL,
+            PRIMARY KEY (thread_id, turn_id)
+        )
+    """)
+
+
 MIGRATIONS: list[Migration] = [
     Migration(1, "initial application schema", _initial_schema),
     Migration(2, "durable automatic continuation attempts", _create_continuation_attempts),
     Migration(3, "observed conversation checkpoints", _create_observed_work),
     Migration(4, "complete observed work metadata", _complete_observed_work),
     Migration(5, "normalize observed work schema", _normalize_observed_work),
+    Migration(6, "separate saved observations from verified activity", _work_verification),
+    Migration(7, "preserve prepared continuation across process exits", _pending_continuations),
 ]
 
 TARGET_VERSION = MIGRATIONS[-1].version
@@ -291,9 +311,7 @@ async def migrate() -> int:
 
         current = await _current_version(db)
         if current > TARGET_VERSION:
-            raise RuntimeError(
-                "Database was created by a newer version; upgrade Codex Account Manager."
-            )
+            raise RuntimeError("Database was created by a newer version; upgrade QuotaCrew.")
 
         cursor = await db.execute("SELECT name FROM sqlite_master WHERE type='table'")
         table_names = {row[0] for row in await cursor.fetchall()}

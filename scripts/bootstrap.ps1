@@ -37,7 +37,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Database initialization failed." }
     & $venvPython -m codex_account_manager.core.windows_shell $projectRoot
     if ($LASTEXITCODE -ne 0) { throw "Shortcut creation failed." }
-    Write-Host "Ready. Open Codex Account Manager from your desktop or Start menu." -ForegroundColor Green
+    Write-Host "Ready. Open QuotaCrew from your desktop or Start menu." -ForegroundColor Green
 } finally {
     Pop-Location
 }

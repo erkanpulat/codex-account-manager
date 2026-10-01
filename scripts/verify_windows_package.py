@@ -8,28 +8,46 @@ import subprocess
 import sys
 import tempfile
 import time
+from contextlib import closing
 from pathlib import Path
 
 
 def main() -> None:
     if sys.platform != "win32":
         raise SystemExit("This check requires Windows.")
+    import win32api
     import win32con
     import win32gui
     import win32process
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "executable", nargs="?", default="dist/CodexAccountManager/CodexAccountManager.exe"
-    )
+    parser.add_argument("executable", nargs="?", default="dist/QuotaCrew/QuotaCrew.exe")
     parser.add_argument(
         "--observe-seconds", type=int, choices=range(0, 301), default=0, metavar="0..300"
     )
     parser.add_argument(
         "--startup-timeout", type=int, choices=range(1, 121), default=25, metavar="1..120"
     )
+    parser.add_argument(
+        "--first-run",
+        action="store_true",
+        help="Verify the first-run setup window without accepting or installing anything.",
+    )
     args = parser.parse_args()
     executable = Path(args.executable).resolve(strict=True)
+    from codex_account_manager import __version__
+
+    for key, expected in (
+        ("ProductName", "QuotaCrew for Codex"),
+        ("FileDescription", "QuotaCrew"),
+        ("ProductVersion", __version__),
+        ("OriginalFilename", "QuotaCrew.exe"),
+    ):
+        if (
+            win32api.GetFileVersionInfo(str(executable), rf"\StringFileInfo\040904B0\{key}")
+            != expected
+        ):
+            raise RuntimeError(f"Unexpected Windows executable metadata: {key}")
     internal = executable.parent / "_internal"
     notices = (internal / "licenses" / "LICENSES.txt").read_text(encoding="utf-8")
     for required in (
@@ -62,11 +80,32 @@ def main() -> None:
             env.pop(key, None)
         for folder in (home / "local", home / "roaming"):
             folder.mkdir()
+        if not args.first_run:
+            import sqlite3
+
+            app_data = home / "local" / "CodexAccountManager"
+            app_data.mkdir()
+            with closing(sqlite3.connect(app_data / "accounts.db")) as db:
+                db.execute(
+                    "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)"
+                )
+                db.executemany(
+                    "INSERT INTO settings VALUES (?, ?, 'smoke-test')",
+                    [
+                        ("setup_completed", "true"),
+                        ("monitor_enabled", "false"),
+                        ("check_updates", "false"),
+                    ],
+                )
+                db.commit()
         startup = subprocess.STARTUPINFO()
         startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         startup.wShowWindow = subprocess.SW_HIDE
         process = subprocess.Popen(
-            [str(executable)], cwd=executable.parent, env=env, startupinfo=startup
+            [str(executable), "--from-windows-shell"],
+            cwd=executable.parent,
+            env=env,
+            startupinfo=startup,
         )
         try:
             started_at = time.monotonic()
@@ -85,7 +124,18 @@ def main() -> None:
                 if any("Unhandled exception" in title for title in titles):
                     raise RuntimeError("The packaged GUI opened a startup error dialog.")
                 if any(
-                    title in {"Codex Account Manager", "Codex Hesap Yöneticisi"} for title in titles
+                    title
+                    in (
+                        {
+                            "Welcome to QuotaCrew",
+                            "QuotaCrew uygulamasına hoş geldiniz",
+                            "Welcome to QuotaCrew - QuotaCrew",
+                            "QuotaCrew uygulamasına hoş geldiniz - QuotaCrew",
+                        }
+                        if args.first_run
+                        else {"QuotaCrew"}
+                    )
+                    for title in titles
                 ):
                     time.sleep(0.5)
                     if process.poll() is not None:
@@ -129,7 +179,7 @@ def main() -> None:
                     )
                 time.sleep(0.1)
             raise TimeoutError(
-                f"The packaged GUI did not open within {args.startup_timeout} seconds."
+                f"The packaged GUI did not open within {args.startup_timeout} seconds; windows: {titles!r}."
             )
         finally:
             if process.poll() is None:

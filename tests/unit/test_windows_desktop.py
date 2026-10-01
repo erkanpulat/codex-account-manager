@@ -126,6 +126,17 @@ def test_shutdown_rechecks_replacement_children(monkeypatch):
     assert parent.terminated and replacement.terminated
 
 
+def test_shutdown_refuses_to_terminate_its_own_desktop_ancestor(monkeypatch):
+    parent = Process("ChatGPT.exe", PACKAGED)
+    monkeypatch.setattr(windows, "_desktop_processes", lambda: [parent])
+    monkeypatch.setattr(
+        windows.psutil, "Process", lambda: SimpleNamespace(parents=lambda: [parent])
+    )
+    with pytest.raises(RuntimeError, match="Start menu shortcut"):
+        windows.stop_desktop()
+    assert not parent.terminated
+
+
 def test_shutdown_timeout_still_aborts(monkeypatch):
     process = Process("ChatGPT.exe", PACKAGED)
     monkeypatch.setattr(windows, "_desktop_processes", lambda: [process])

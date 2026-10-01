@@ -79,6 +79,12 @@ def stop_desktop() -> None:
         processes = _desktop_processes()
         if not processes:
             return
+        ancestors = {process.pid for process in psutil.Process().parents()}
+        if ancestors.intersection(process.pid for process in processes):
+            raise RuntimeError(
+                "QuotaCrew was launched by Codex Desktop. Close QuotaCrew and open it "
+                "from its Start menu shortcut before switching accounts. Desktop was not stopped."
+            )
         # Stop the Electron parent before its children so it cannot replace them.
         identities = {process.pid for process in processes}
         ordered = []
@@ -110,7 +116,10 @@ def is_desktop_running() -> bool:
 def launch_desktop() -> None:
     """Launch the packaged Codex Desktop by App ID (the reliable method)."""
     subprocess.Popen(
-        ["explorer.exe", rf"shell:AppsFolder\{CODEX_APP_ID}"],
+        [
+            os.path.join(os.environ.get("SystemRoot", "C:/Windows"), "explorer.exe"),
+            rf"shell:AppsFolder\{CODEX_APP_ID}",
+        ],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

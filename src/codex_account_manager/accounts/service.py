@@ -13,7 +13,9 @@ import asyncio
 import shutil
 import sqlite3
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
@@ -21,7 +23,13 @@ from codex_account_manager.adapters.app_server import CodexAppServer
 from codex_account_manager.adapters.credential_store import FileCredentialStore
 from codex_account_manager.adapters.interfaces import AppServerAdapter
 from codex_account_manager.codex.quota import evaluate_quota
-from codex_account_manager.core.errors import AccountMismatchError, ProfileNotFoundError
+from codex_account_manager.core.errors import (
+    AccountMismatchError,
+    AppServerError,
+    ProfileNotFoundError,
+    SignedOutError,
+    SignInRequiredError,
+)
 from codex_account_manager.core.files import restrict_access
 from codex_account_manager.core.logging import get_logger
 from codex_account_manager.core.operation_lock import OperationLock
@@ -38,10 +46,14 @@ AppServerFactory = Callable[[str], AppServerAdapter]
 _PROFILE_CONFIG = 'cli_auth_credentials_store = "file"\n'
 #: Upper bound on concurrent App Server reads to keep the machine responsive.
 _MAX_CONCURRENT_READS = 4
+ACCOUNT_READ_TIMEOUT = 45.0
 
 
 def _default_factory(codex_home: str) -> AppServerAdapter:
-    return CodexAppServer(codex_home)
+    return CodexAppServer(
+        codex_home,
+        refresh_on_unauthorized=Path(codex_home).resolve().parent == paths.profiles_dir.resolve(),
+    )
 
 
 async def _safe_aclose(adapter: AppServerAdapter) -> None:
@@ -62,8 +74,9 @@ class AccountService:
         self.profiles = profiles or ProfileRepository()
         self._factory = app_server_factory or _default_factory
         self.credentials = credential_store or FileCredentialStore()
+        self._last_health: dict[str, tuple[str | None, ProfileHealth]] = {}
+        self._health_task: asyncio.Task[list[ProfileHealth]] | None = None
 
-    # Profile lifecycle
     async def list_profiles(self) -> list[Profile]:
         return await self.profiles.list()
 
@@ -158,63 +171,115 @@ class AccountService:
             raise ValueError("This account is already bound to another profile.") from exc
         return snapshot.account_id
 
-    # Reads
-    async def read_snapshot(self, codex_home: str | Path) -> AccountSnapshot:
-        adapter = self._factory(str(codex_home))
-        try:
-            await adapter.start()
-            return await adapter.read_account()
-        finally:
-            # Shield cleanup so a cancellation (e.g. app shutdown) still tears
-            # the subprocess down instead of leaking its transport.
-            await asyncio.shield(_safe_aclose(adapter))
+    async def read_snapshot(
+        self, codex_home: str | Path, *, allow_refresh: bool = True
+    ) -> AccountSnapshot:
+        home_key = str(Path(codex_home).resolve()).casefold()
+        digest = sha256(home_key.encode()).hexdigest()[:24]
+        with OperationLock(paths.data_dir / f"account-read-{digest}.lock"):
+            adapter = self._factory(str(codex_home))
+            if not allow_refresh and isinstance(adapter, CodexAppServer):
+                adapter.refresh_on_unauthorized = False
+            try:
+                try:
+                    async with asyncio.timeout(ACCOUNT_READ_TIMEOUT):
+                        await adapter.start()
+                        return await adapter.read_account()
+                except TimeoutError as exc:
+                    raise AppServerError("Account check timed out. Try refreshing again.") from exc
+            finally:
+                await asyncio.shield(_safe_aclose(adapter))
 
     async def health(self, alias: str) -> ProfileHealth:
         profile = await self._require(alias)
-        active_id = await self._active_account_id_safe()
-        return await self._health_for(profile, active_account_id=active_id)
+        return (await self._health_batch([profile]))[0]
 
     async def all_health(self) -> list[ProfileHealth]:
-        """Structured health for every profile, read concurrently.
+        if self._health_task is None or self._health_task.done():
+            self._health_task = asyncio.create_task(self._all_health())
+        return list(await asyncio.shield(self._health_task))
 
-        Profiles are read in parallel with bounded concurrency so refreshing a
-        dozen accounts stays fast without spawning an unbounded number of App
-        Server processes at once.
-        """
+    async def _all_health(self) -> list[ProfileHealth]:
         profiles = await self.profiles.list()
+        profile_ids = {p.id for p in profiles}
+        self._last_health = {
+            key: value for key, value in self._last_health.items() if key in profile_ids
+        }
+        return await self._health_batch(profiles)
+
+    async def _health_batch(self, profiles: list[Profile]) -> list[ProfileHealth]:
         if not profiles:
             return []
-        active_id = await self._active_account_id_safe()
-        semaphore = asyncio.Semaphore(_MAX_CONCURRENT_READS)
+        try:
+            with OperationLock(paths.data_dir / "account-operation.lock"):
+                allow_refresh = True
+                try:
+                    active = await self.read_snapshot(paths.shared_codex_home)
+                    if not active.account_id and self.credentials.active_auth_path.exists():
+                        raise AppServerError("The active account identity is unavailable.")
+                except SignedOutError:
+                    active = None
+                except Exception:
+                    allow_refresh = not self.credentials.active_auth_path.exists()
+                    active = None
+                active_id = active.account_id if active else None
+                semaphore = asyncio.Semaphore(_MAX_CONCURRENT_READS)
 
-        async def _bounded(profile: Profile) -> ProfileHealth:
-            async with semaphore:
-                return await self._health_for(profile, active_account_id=active_id)
+                async def bounded(profile: Profile) -> ProfileHealth:
+                    async with semaphore:
+                        return await self._health_for(
+                            profile,
+                            active_account_id=active_id,
+                            active_snapshot=active,
+                            allow_refresh=allow_refresh,
+                        )
 
-        return list(await asyncio.gather(*(_bounded(p) for p in profiles)))
+                return list(await asyncio.gather(*(bounded(p) for p in profiles)))
+        except Exception as exc:
+            return [self._failed_health(p, exc, active_account_id=None) for p in profiles]
 
     async def _health_for(
-        self, profile: Profile, *, active_account_id: str | None
+        self,
+        profile: Profile,
+        *,
+        active_account_id: str | None,
+        active_snapshot: AccountSnapshot | None = None,
+        allow_refresh: bool = True,
     ) -> ProfileHealth:
         auth_present = self.credentials.profile_auth_path(profile.codex_home).exists()
         try:
-            snapshot = await self.read_snapshot(profile.codex_home)
+            is_active = bool(
+                profile.bound_account_id and profile.bound_account_id == active_account_id
+            )
+            snapshot = (
+                active_snapshot
+                if is_active and active_snapshot
+                else (
+                    await self.read_snapshot(profile.codex_home)
+                    if allow_refresh
+                    else await self.read_snapshot(profile.codex_home, allow_refresh=False)
+                )
+            )
+            if profile.bound_account_id and not snapshot.account_id:
+                raise AppServerError(
+                    "Codex did not return an account identity. Try checking again."
+                )
             decision = evaluate_quota(snapshot)
             match = (
                 None
                 if not profile.bound_account_id
                 else profile.bound_account_id == snapshot.account_id
             )
-            is_active = bool(
-                profile.bound_account_id and profile.bound_account_id == active_account_id
-            )
-            return ProfileHealth(
+            health = ProfileHealth(
                 alias=profile.alias,
                 profile_id=profile.id,
                 plan_type=snapshot.plan_type,
+                email=snapshot.email if match is True else None,
                 reset_credits=snapshot.reset_credits if match is True else None,
                 primary_used_percent=snapshot.primary_used_percent,
                 secondary_used_percent=snapshot.secondary_used_percent,
+                primary_window_minutes=snapshot.primary_window_minutes,
+                secondary_window_minutes=snapshot.secondary_window_minutes,
                 primary_resets_at=snapshot.primary_resets_at,
                 secondary_resets_at=snapshot.secondary_resets_at,
                 ordinary_usage_allowed=snapshot.ordinary_usage_allowed,
@@ -224,25 +289,53 @@ class AccountService:
                 quota_state=decision.state,
                 last_checked_at=datetime.now(UTC),
             )
+            if match is True:
+                self._last_health[profile.id] = (profile.bound_account_id, health)
+            else:
+                self._last_health.pop(profile.id, None)
+            return health
         except Exception as exc:
-            return ProfileHealth(
+            return self._failed_health(profile, exc, active_account_id=active_account_id)
+
+    def _failed_health(
+        self, profile: Profile, error: Exception, *, active_account_id: str | None
+    ) -> ProfileHealth:
+        auth_present = self.credentials.profile_auth_path(profile.codex_home).exists()
+        reauth = isinstance(error, SignInRequiredError)
+        cached = self._last_health.get(profile.id)
+        previous = cached[1] if cached and cached[0] == profile.bound_account_id else None
+        if previous and auth_present and not reauth:
+            return replace(
+                previous,
                 alias=profile.alias,
-                profile_id=profile.id,
-                plan_type=None,
-                primary_used_percent=None,
-                secondary_used_percent=None,
-                primary_resets_at=None,
-                secondary_resets_at=None,
-                ordinary_usage_allowed=None,
-                auth_present=auth_present,
-                account_match=None,
+                stale=True,
                 is_active=bool(
                     profile.bound_account_id and profile.bound_account_id == active_account_id
                 ),
                 quota_state=QuotaState.UNKNOWN,
-                last_checked_at=datetime.now(UTC),
-                error=redact_text(str(exc)),
+                ordinary_usage_allowed=None,
+                error=redact_text(str(error)),
             )
+        self._last_health.pop(profile.id, None)
+        return ProfileHealth(
+            alias=profile.alias,
+            profile_id=profile.id,
+            plan_type=None,
+            primary_used_percent=None,
+            secondary_used_percent=None,
+            primary_resets_at=None,
+            secondary_resets_at=None,
+            ordinary_usage_allowed=None,
+            auth_present=auth_present,
+            account_match=None,
+            is_active=bool(
+                profile.bound_account_id and profile.bound_account_id == active_account_id
+            ),
+            quota_state=QuotaState.UNKNOWN,
+            last_checked_at=None,
+            error=redact_text(str(error)),
+            reauth_required=reauth,
+        )
 
     async def active_account_id(self) -> str | None:
         """Account id currently active in the shared home."""

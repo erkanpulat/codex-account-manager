@@ -58,5 +58,11 @@ Thumbs.db
 *.sqlite3
 *.sqlite3-wal
 *.sqlite3-shm
+QuotaCrew-portable-*.zip
 CodexAccountManager-portable-*.zip
 codex-account-manager-source*.zip
+codex-quotacrew-source*.zip
+
+# Local scratch work and development tools
+/scratch/
+/.tools/

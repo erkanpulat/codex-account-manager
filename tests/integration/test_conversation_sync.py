@@ -97,6 +97,8 @@ async def test_failed_snapshot_write_rolls_back_visibility(migrated_db):
 
 
 async def test_automatic_selection_excludes_newer_subagent(migrated_db, monkeypatch):
+    from unittest.mock import AsyncMock
+
     adapter = FakeAppServer(
         threads=[
             thread(1, updated_at=10, source="vscode"),
@@ -124,6 +126,7 @@ async def test_automatic_selection_excludes_newer_subagent(migrated_db, monkeypa
         GoalInfo("thread-1", None, None, False),
     )
     service = ContinuityService()
+    adapter.is_desktop_thread = AsyncMock(return_value=True)
     service.automation.native.latest_turn = adapter.observed_turn
     await service.observe_work()
     assert (await WorkTracker().limited(adapter.account_id))[0][0] == "thread-1"

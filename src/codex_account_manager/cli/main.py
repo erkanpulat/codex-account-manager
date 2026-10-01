@@ -1,4 +1,4 @@
-"""Codex Account Manager command line interface (``cx``).
+"""QuotaCrew command line interface (``cx``).
 
 Thin Typer app over the core services. Business logic lives in
 ``codex_account_manager.accounts``/``auth``/``continuity``/``goals``/``diagnostics``;
@@ -31,9 +31,7 @@ from codex_account_manager.core.paths import paths
 from codex_account_manager.core.redaction import redact_text
 from codex_account_manager.storage.database import initialize_database
 
-app = typer.Typer(
-    no_args_is_help=True, help="Codex Account Manager — continuity & profile control center."
-)
+app = typer.Typer(no_args_is_help=True, help="QuotaCrew — continuity & profile control center.")
 profile_app = typer.Typer(no_args_is_help=True, help="Profile management.")
 continuity_app = typer.Typer(no_args_is_help=True, help="Thread & goal continuity.")
 goal_app = typer.Typer(no_args_is_help=True, help="Local goal notes and native Codex goal status.")
@@ -59,7 +57,6 @@ def main() -> None:
     _run(initialize_database())
 
 
-# Formatting helpers
 def _format_reset(value: int | None) -> str:
     if not value:
         return "-"
@@ -89,7 +86,6 @@ def _run(coro):
         raise typer.Exit(1) from exc
 
 
-# Core lifecycle
 @app.command()
 def init() -> None:
     """Create/upgrade the database (runs migrations)."""
@@ -100,7 +96,7 @@ def init() -> None:
 @app.command()
 def status() -> None:
     """Show a one-line status."""
-    console.print("[bold green]Codex Account Manager is installed.[/bold green]")
+    console.print("[bold green]QuotaCrew is installed.[/bold green]")
 
 
 @app.command()
@@ -113,7 +109,7 @@ def gui() -> None:
     except ImportError:
         console.print(
             "[bold red]GUI dependencies are not installed.[/bold red] "
-            "Install with: pip install 'codex-account-manager[gui]'"
+            "Install with: pip install 'codex-quotacrew[gui]'"
         )
         raise typer.Exit(1) from None
     raise typer.Exit(run_gui())
@@ -127,7 +123,7 @@ def doctor(
     from codex_account_manager.diagnostics import export_bundle, run_diagnostics
 
     results = _run(run_diagnostics())
-    table = Table(title="Codex Account Manager Diagnostics")
+    table = Table(title="QuotaCrew Diagnostics")
     table.add_column("Check")
     table.add_column("Status")
     table.add_column("Detail")
@@ -139,7 +135,6 @@ def doctor(
         console.print(f"[green]Diagnostics bundle:[/green] {path}")
 
 
-# Profiles
 @profile_app.command("add")
 def profile_add(alias: str) -> None:
     """Create a new profile (uses file credential storage)."""
@@ -203,7 +198,6 @@ def sandbox_setup(alias: str) -> None:
     raise typer.Exit(run_sandbox_setup_elevated(profile.codex_home))
 
 
-# Accounts / quota
 @app.command("account")
 def account(alias: str) -> None:
     """Show account details and quota for one profile."""
@@ -237,7 +231,7 @@ def accounts() -> None:
     if not health:
         console.print("No profiles yet.")
         return
-    table = Table(title="Codex Accounts")
+    table = Table(title="QuotaCrew accounts")
     for col in (
         "Profile",
         "Plan",
@@ -291,7 +285,6 @@ async def _quota_snapshot(alias: str):
     return await _accounts.read_snapshot(profile.codex_home)
 
 
-# Switching / continuity
 @app.command("switch")
 def switch(
     alias: str,
@@ -368,7 +361,6 @@ def resume(thread: str) -> None:
     console.print(f"[green]Resumed thread {thread}.[/green]")
 
 
-# Goals
 @goal_app.command("status")
 def goal_status(thread: str) -> None:
     from codex_account_manager.goals.service import GoalService

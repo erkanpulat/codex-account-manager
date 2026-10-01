@@ -2,10 +2,45 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
 APP_USER_MODEL_ID = "CodexAccountManager.Desktop"
+SHELL_LAUNCH_ARGUMENT = "--from-windows-shell"
+
+
+def launch_from_explorer(executable: Path, arguments: list[str], *, visible: bool = True) -> None:
+    """Delegate creation to the existing Explorer, outside the caller's job objects."""
+    import pythoncom
+    import win32com.client
+
+    pythoncom.CoInitialize()
+    try:
+        desktop = (
+            win32com.client.Dispatch("Shell.Application").Windows().FindWindowSW(0, 0, 8, 0, 1)
+        )
+        desktop.Document.Application.ShellExecute(
+            str(executable),
+            subprocess.list2cmdline(arguments),
+            str(executable.parent),
+            "open",
+            1 if visible else 0,
+        )
+    finally:
+        pythoncom.CoUninitialize()
+
+
+def delegate_gui_launch() -> bool:
+    if sys.platform != "win32" or SHELL_LAUNCH_ARGUMENT in sys.argv:
+        return False
+    executable = Path(sys.executable)
+    arguments = [SHELL_LAUNCH_ARGUMENT]
+    if not getattr(sys, "frozen", False):
+        executable = executable.with_name("pythonw.exe")
+        arguments = ["-m", "codex_account_manager.gui.tray_main", *arguments]
+    launch_from_explorer(executable, arguments)
+    return True
 
 
 def set_application_identity() -> None:
@@ -26,7 +61,7 @@ def create_shortcuts(
     from win32com.shell import shell, shellcon
 
     root = project_root.resolve()
-    executable = root / ".venv" / "Scripts" / "codex-account-manager.exe"
+    executable = root / ".venv" / "Scripts" / "quotacrew.exe"
     icon = root / "packaging" / "assets" / "app.ico"
     for required in (executable, icon):
         if not required.is_file():
@@ -39,7 +74,7 @@ def create_shortcuts(
     created = []
     for directory in destinations:
         directory.mkdir(parents=True, exist_ok=True)
-        path = directory / "Codex Account Manager.lnk"
+        path = directory / "QuotaCrew.lnk"
         shortcut = pythoncom.CoCreateInstance(
             shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink
         )
@@ -47,7 +82,7 @@ def create_shortcuts(
         shortcut.SetArguments("")
         shortcut.SetWorkingDirectory(str(root))
         shortcut.SetIconLocation(str(icon), 0)
-        shortcut.SetDescription("Codex Account Manager")
+        shortcut.SetDescription("QuotaCrew")
         shortcut.QueryInterface(pythoncom.IID_IPersistFile).Save(str(path), 1)
         properties = propsys.SHGetPropertyStoreFromParsingName(
             str(path), None, shellcon.GPS_READWRITE, propsys.IID_IPropertyStore
@@ -55,6 +90,17 @@ def create_shortcuts(
         properties.SetValue(pscon.PKEY_AppUserModel_ID, propsys.PROPVARIANTType(APP_USER_MODEL_ID))
         properties.Commit()
         created.append(path)
+        legacy = directory / "Codex Account Manager.lnk"
+        if legacy.is_file():
+            previous = pythoncom.CoCreateInstance(
+                shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink
+            )
+            previous.QueryInterface(pythoncom.IID_IPersistFile).Load(str(legacy))
+            if (
+                Path(previous.GetPath(0)[0]).resolve()
+                == root / ".venv/Scripts/codex-account-manager.exe"
+            ):
+                legacy.unlink()
     return created
 
 

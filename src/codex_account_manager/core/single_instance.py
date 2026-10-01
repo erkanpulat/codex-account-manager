@@ -1,6 +1,6 @@
 """Single-instance guard.
 
-Ensures only one Account Manager background/tray process runs at a time. Uses a
+Ensures only one QuotaCrew background/tray process runs at a time. Uses a
 named Windows mutex when available and falls back to an exclusive lock file on
 other platforms (so the core stays importable and testable off-Windows).
 """

@@ -29,7 +29,7 @@ def test_redacts_sensitive_dict_keys():
     }
     out = redact(data)
     assert out["access_token"] == "***REDACTED***"
-    assert out["email"] == "safe@example.test"
+    assert out["email"] == "***REDACTED***"
     assert out["nested"]["refresh_token"] == "***REDACTED***"
 
 
@@ -48,3 +48,7 @@ def test_short_sensitive_values_are_redacted_in_error_text(key, template):
     assert "sample-value" not in result
     assert "Request failed:" in result
     assert "***REDACTED***" in result
+
+
+def test_emails_are_removed_from_error_and_log_text():
+    assert "owner@example.test" not in redact_text("Request rejected for owner@example.test")

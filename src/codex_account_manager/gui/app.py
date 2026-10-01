@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
 from codex_account_manager.core.errors import AccountRecoveryRequired
@@ -15,7 +16,7 @@ log = get_logger(__name__)
 
 def run_gui() -> int:
     configure_logging()
-    # Ensure the database is migrated before the UI reads from it.
+    log.info("QuotaCrew started (pid=%d).", os.getpid())
     try:
         asyncio.run(initialize_database())
     except AccountRecoveryRequired:
@@ -39,13 +40,15 @@ def run_gui() -> int:
     AuthTransaction().recover()
 
     from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
-    from PySide6.QtWidgets import QApplication, QSystemTrayIcon
+    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtWidgets import QApplication
 
     from codex_account_manager.gui.i18n import set_language, tr
     from codex_account_manager.storage.repositories import SettingsRepository
 
     default_language = "tr" if QLocale.system().name().startswith("tr") else "en"
     selected_language = asyncio.run(SettingsRepository().get("language", default_language))
+    selected_theme = asyncio.run(SettingsRepository().get("theme", "dark"))
     set_language(selected_language or default_language)
 
     from codex_account_manager.gui.async_runner import AsyncRunner
@@ -57,21 +60,59 @@ def run_gui() -> int:
     existing = QApplication.instance()
     app = existing if isinstance(existing, QApplication) else QApplication(sys.argv)
     app.setStyle("Fusion")
-    app.setApplicationName("Codex Account Manager")
-    app.setApplicationDisplayName(tr("Codex Account Manager"))
+    if sys.platform == "win32":
+        from pathlib import Path
+
+        font_dir = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
+        for filename in ("segoeui.ttf", "segoeuib.ttf", "segoeuisl.ttf"):
+            font_path = font_dir / filename
+            if font_path.is_file():
+                QFontDatabase.addApplicationFont(str(font_path))
+    app.setApplicationName("QuotaCrew")
+    app.setApplicationDisplayName(tr("QuotaCrew"))
     translator = QTranslator(app)
     if selected_language == "tr" and translator.load(
         "qtbase_tr", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
     ):
         app.installTranslator(translator)
     app.setWindowIcon(app_icon())
-    app.setStyleSheet(stylesheet(dark=True))
-    # Keep running in the tray when the window is closed.
-    app.setQuitOnLastWindowClosed(not QSystemTrayIcon.isSystemTrayAvailable())
+    app.setStyleSheet(stylesheet(dark=selected_theme == "dark"))
+    app.setQuitOnLastWindowClosed(True)
+    app.aboutToQuit.connect(lambda: log.info("QuotaCrew exit requested (pid=%d).", os.getpid()))
 
     runner = AsyncRunner()
-    window = MainWindow(runner)
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QDialog, QMessageBox
+
+    from codex_account_manager.gui.onboarding import SetupDialog, needs_setup
+
+    show_tour = False
+    if asyncio.run(needs_setup()):
+        app.setQuitOnLastWindowClosed(False)
+        setup = SetupDialog(runner)
+        if setup.exec() != QDialog.DialogCode.Accepted:
+            runner.shutdown()
+            return 0
+        try:
+            asyncio.run(SettingsRepository().set_many(setup.values()))
+        except Exception:
+            QMessageBox.critical(
+                None,
+                tr("Setup"),
+                tr(
+                    "Your preferences could not be saved. Please reopen the application to try again."
+                ),
+            )
+            runner.shutdown()
+            return 1
+        show_tour = setup.tour.isChecked()
+        setup.deleteLater()
+    window = MainWindow(runner, dark=selected_theme == "dark")
     window.show()
+    app.setQuitOnLastWindowClosed(True)
+    window.updates.start()
+    if show_tour:
+        QTimer.singleShot(250, window.start_tour)
     from codex_account_manager.monitoring.watcher import Watcher
 
     watcher = Watcher(accounts=window.accounts)
@@ -82,6 +123,7 @@ def run_gui() -> int:
     finally:
         window.dispose()
         runner.shutdown()
+        log.info("QuotaCrew stopped (pid=%d).", os.getpid())
 
 
 if __name__ == "__main__":

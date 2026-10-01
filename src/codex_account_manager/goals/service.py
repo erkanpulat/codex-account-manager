@@ -135,11 +135,8 @@ class GoalService:
         native = await adapter.get_goal(thread_id)
 
         if checkpoint is None:
-            return ReconcileResult(
-                "none", None, "No Account Manager goal checkpoint for this thread."
-            )
+            return ReconcileResult("none", None, "No QuotaCrew goal checkpoint for this thread.")
 
-        # Record what we observed.
         checkpoint.native_goal_present = native.present if native is not None else None
         checkpoint.native_goal_status = native.status if native else None
         checkpoint.last_seen_at = datetime.now(UTC)
@@ -189,7 +186,7 @@ class GoalService:
             await self.goals.upsert(checkpoint)
             return ReconcileResult("none", checkpoint, "Native goal is present; nothing to do.")
 
-        # Account Manager believes there is an active goal but native goal is gone.
+        # QuotaCrew believes there is an active goal but native goal is gone.
         if native is None:
             await self._mark_status(thread_id, GoalState.NEEDS_USER)
             return ReconcileResult(
