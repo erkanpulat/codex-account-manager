@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-10-02
+
+- Redesign automatic shutdown with selected-work, all-limits and elapsed-time modes, contextual inputs and conversation selection on the same page.
+- Use a fixed two-minute countdown for verified conditions; include the warning in the timer's selected 1–1440 minute duration.
+- Keep timers independent of monitoring and connection failures, with cancellation available on the page and in the tray.
+- Preserve accounts, application data and existing Desktop/IDE continuation behavior during updates.
+
 ## 0.2.0 — 2026-10-01
 
 - Recheck Desktop work inside the account transaction after target verification, before stopping Desktop. Defer a quota handoff if new work starts, monitoring stops or ownership cannot be verified during preparation.

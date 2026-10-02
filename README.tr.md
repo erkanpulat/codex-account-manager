@@ -36,7 +36,7 @@ Bir işin ortasında limit dolduğunda, hangi hesabın kullanılabilir olduğunu
 
 Geçiş sırasında hesaplar ve konuşmalar yeniden kontrol edilir. Kontrol aralığına ve uygulamaların açılma süresine bağlı olarak bu işlem birkaç dakika sürebilir. Hedef, talimatlar ve bütçe korunur; kullanıcı onayı gereken adımlar sizin kontrolünüzde kalır. Bağımsız bir konuşmadaki sorun, diğer uygun konuşmaların devamını engellemez.
 
-> **Devam özelliği hakkında:** Desktop ve IDE'de otomatik devam, 0.2.0 sürümünde deneyseldir ve kurulu Codex sürümünün bağlantı desteğine bağlıdır. Uygulama, devam gerektiren işi ve konuşma bağlantısını doğruladığında istek gönderir; onay veya kullanıcı yanıtı gerekiyorsa bunu bildirir.
+> **Devam özelliği hakkında:** Desktop ve IDE'de otomatik devam, deneyseldir ve kurulu Codex sürümünün bağlantı desteğine bağlıdır. Uygulama, devam gerektiren işi ve konuşma bağlantısını doğruladığında istek gönderir; onay veya kullanıcı yanıtı gerekiyorsa bunu bildirir.
 
 <details>
 <summary>Devam isteği ve bağlantıların teknik ayrıntıları</summary>
@@ -85,7 +85,7 @@ QuotaCrew bir VS Code eklentisi yüklemez. **Projeyi editörde aç** klasörü a
 
 **Python pakete dahil · Node.js gerekmez · Mevcut Codex sohbetleriniz korunur**
 
-1. **İndirin ve açın.** [Son sürüm](https://github.com/erkanpulat/codex-quotacrew/releases/latest) sayfasından `QuotaCrew-Setup-0.2.0.exe` dosyasını indirip kurun. Taşınabilir kullanım için ZIP'in tamamını bir klasöre çıkarın ve `QuotaCrew.exe` dosyasını açın.
+1. **İndirin ve açın.** [Son sürüm](https://github.com/erkanpulat/codex-quotacrew/releases/latest) sayfasından `QuotaCrew-Setup-0.2.1.exe` dosyasını indirip kurun. Taşınabilir kullanım için ZIP'in tamamını bir klasöre çıkarın ve `QuotaCrew.exe` dosyasını açın.
 2. **Tercihlerinizi seçin.** İlk açılış yardımcısı izleme, hesap geçişi, sohbet devamı ve tepsi seçeneklerini tanıtır. Codex CLI eksikse onayınızla resmî Windows kurulumunu başlatır; mevcut CLI kurulumunuzu korur.
 3. **Hesaplarınızı ekleyin.** **Hesaplarım → Hesap ekle** bölümünde hesabınıza bir ad verin. Açılan terminal ve varsayılan tarayıcıda girişinizi tamamlayın; ardından diğer hesaplarınızı ekleyip kotaları yenileyin.
 
@@ -115,7 +115,7 @@ Windows paketleri kod imzalı değildir. `SHA256SUMS.txt`, sürüm dosyalarını
 
 Yerel konuşmalarınızı proje, kaynak, başlık veya klasöre göre arayın; ilgili projeyi editörünüzde açın. `Ctrl+F` aramaya odaklanır, `Ctrl+R` sayfayı yeniler. **Takibi temizle**, QuotaCrew'ün takip kayıtlarını temizleyip izlemeyi duraklatır; Codex sohbet geçmişinizi silmez. Çalışan bir konuşmayı durdurmak için Codex'in **Durdur** düğmesini kullanın.
 
-**Otomatik Kapatma**, tüm kayıtlı hesapların limitinin dolması veya seçtiğiniz işin tamamlanması doğrulandığında iptal edilebilir bir geri sayım başlatır. Süreyi **1–1440 dakika** arasında seçebilirsiniz: 120 dakika iki saat, 180 dakika üç saattir. Özellik her oturumda sizin onayınızla açılır; açık uygulamalar zorla kapatılmaz. [Kapatma koşulları](docs/continuity.md#optional-windows-shutdown).
+**Otomatik Kapatma** için üç seçenek vardır: seçtiğiniz iş tamamlandığında, tüm kayıtlı hesapların kullanılabilir limitleri dolduğunda veya belirlediğiniz süre sonunda. İş ve limit koşulları doğrulanıp başka bir Codex işinin çalışmadığı görüldüğünde **2 dakikalık iptal edilebilir geri sayım** başlar. Süreli modda **1–1440 dakika** seçebilirsiniz (120 dakika = iki saat); son uyarı bu süreye dahildir ve işlerin bitmesi beklenmez. Planlar onayınızla açılır, yalnızca o oturumda geçerlidir ve açık uygulamaları zorla kapatmaz. [Kapatma koşulları](docs/continuity.md#optional-windows-shutdown).
 
 <details>
 <summary>Konuşma geçmişi, hesap ekleme, sıfırlama hakları ve otomatik kapatma</summary>
@@ -128,7 +128,7 @@ Yerel konuşmalarınızı proje, kaynak, başlık veya klasöre göre arayın; i
 
 ![Otomatik kapatma koşulları ve dakika cinsinden geri sayım](docs/images/power-tr.png)
 
-Arşivlenmiş, yalnızca bulutta veya başka cihazda bulunan konuşmalar yerel listede gösterilmez. Codex hedefini okumak ve yerel hedef notu kaydetmek model çalıştırmaz. Güncel durum doğrulanamıyorsa veya izlenen başka bir iş sürüyorsa otomatik kapatma bekler; uygulamadan çıkmak kapatma planını iptal eder.
+Arşivlenmiş, yalnızca bulutta veya başka cihazda bulunan konuşmalar yerel listede gösterilmez. Codex hedefini okumak ve yerel hedef notu kaydetmek model çalıştırmaz. İş ve limit modlarında güncel durum doğrulanamıyorsa veya başka bir iş sürüyorsa kapatma bekler; uygulamadan çıkmak kapatma planını iptal eder.
 
 </details>
 

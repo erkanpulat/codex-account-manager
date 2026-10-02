@@ -7,7 +7,6 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, Qt
-from PySide6.QtWidgets import QApplication
 from scripts.render_preview import PreviewRunner, sample_profiles
 
 from codex_account_manager.gui.async_runner import AsyncRunner
@@ -16,11 +15,10 @@ from codex_account_manager.gui.theme import stylesheet
 
 
 @pytest.fixture(scope="module")
-def app():
-    app = QApplication.instance() or QApplication([])
-    app.setStyle("Fusion")
-    app.setStyleSheet(stylesheet())
-    yield app
+def app(qt_app):
+    qt_app.setStyle("Fusion")
+    qt_app.setStyleSheet(stylesheet())
+    return qt_app
 
 
 @pytest.fixture
@@ -1754,9 +1752,9 @@ def test_shutdown_duration_and_confirmation_are_turkish(window, monkeypatch):
     try:
         controls = PowerControls(PreviewRunner(), window.accounts)
         assert controls.status.text() == "Otomatik kapatma kapalı."
-        assert not controls.enable_toggle.isChecked()
+        assert controls.plan.target is None
         controls.countdown_minutes.setValue(7)
-        assert controls.plan.seconds == 420
+        assert controls.time_fields.isHidden()
         prompts = []
 
         def decline(_parent, title, message, _buttons, _default):
@@ -1765,19 +1763,101 @@ def test_shutdown_duration_and_confirmation_are_turkish(window, monkeypatch):
 
         monkeypatch.setattr(QMessageBox, "question", decline)
         controls.arm(PowerTarget("limits"))
-        assert prompts and "7 dakika" in prompts[0][1]
+        assert prompts and "2 dakika" in prompts[0][1]
         assert "Otomatik kapatmayı etkinleştir" == prompts[0][0]
         assert controls.plan.target is None
         assert not controls.timer.isActive()
-        assert not controls.enable_toggle.isChecked()
+        assert controls.plan.target is None
         monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
         monkeypatch.setattr(controls, "_tick", lambda: None)
-        controls.enable_toggle.setChecked(True)
+        controls.schedule_button.click()
         assert controls.plan.target == PowerTarget("limits")
         assert not controls.countdown_minutes.isEnabled()
         controls.cancel()
-        assert not controls.enable_toggle.isChecked()
+        assert controls.plan.target is None
         assert controls.countdown_minutes.isEnabled()
         controls.deleteLater()
     finally:
         set_language(previous)
+
+
+@pytest.mark.parametrize("minutes", [1, 120, 180])
+def test_timed_shutdown_warns_within_total_duration_and_executes_once(window, monkeypatch, minutes):
+    from unittest.mock import Mock
+
+    from codex_account_manager.gui import power as gui_power
+    from codex_account_manager.monitoring.power import PowerEvidence, PowerTarget
+    from codex_account_manager.platform import power
+
+    widget = window.power_view.controls
+    clock = [100.0]
+    monkeypatch.setattr(gui_power.time, "monotonic", lambda: clock[0])
+    shutdown = Mock()
+    monkeypatch.setattr(power, "shutdown_windows", shutdown)
+    submit = Mock(side_effect=AssertionError("Timer must not query accounts or conversations"))
+    monkeypatch.setattr(widget.runner, "submit", submit)
+    warning = Mock()
+    widget.countdown_started.connect(warning)
+    widget.plan.set_seconds(minutes * 60)
+    widget.plan.arm(PowerTarget("timer"), now=clock[0])
+    widget._tick()
+    widget.plan.observe(PowerEvidence(False, "connection lost"), clock[0])
+    clock[0] = 100 + max(0, minutes * 60 - 120)
+    widget._tick()
+    widget._tick()
+    warning.assert_called_once()
+    shutdown.assert_not_called()
+    clock[0] = 100 + minutes * 60
+    widget._tick()
+    widget._tick()
+    shutdown.assert_called_once()
+    assert widget.plan.target is None
+    submit.assert_not_called()
+
+
+def test_timer_cancel_and_monitoring_pause_are_independent(window, monkeypatch):
+    from unittest.mock import Mock
+
+    from codex_account_manager.monitoring.power import PowerTarget
+    from codex_account_manager.platform import power
+
+    widget = window.power_view.controls
+    shutdown = Mock()
+    monkeypatch.setattr(power, "shutdown_windows", shutdown)
+    widget.plan.arm(PowerTarget("timer"), now=time.monotonic())
+    window._monitor_enabled = True
+    window._monitoring_changed(False)
+    assert widget.plan.target.mode == "timer"
+    widget.cancel()
+    widget._tick()
+    shutdown.assert_not_called()
+
+
+def test_shutdown_fields_only_show_relevant_inputs(window):
+    widget = window.power_view.controls
+    for mode in ("work", "limits", "timer"):
+        widget.mode.setCurrentIndex(widget.mode.findData(mode))
+        assert widget.time_fields.isHidden() == (mode != "timer")
+        assert widget.work_fields.isHidden() == (mode != "work")
+
+
+def test_cancelled_work_preparation_cannot_arm_a_plan(window, monkeypatch):
+    from unittest.mock import Mock
+
+    from codex_account_manager.monitoring.power import PowerTarget
+
+    widget = window.power_view.controls
+    callbacks = []
+
+    def submit(coro, on_result=None, on_error=None):
+        coro.close()
+        callbacks.append(on_result)
+
+    monkeypatch.setattr(widget.runner, "submit", submit)
+    arm = Mock()
+    monkeypatch.setattr(widget, "arm", arm)
+    widget.arm_work("thread")
+    widget.cancel()
+    callbacks.pop()(PowerTarget("work", "thread", None, "turn"))
+    arm.assert_not_called()
+    assert widget.schedule_button.isEnabled() == (os.name == "nt")

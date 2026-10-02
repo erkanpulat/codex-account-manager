@@ -26,11 +26,12 @@ class PowerEvidence:
 
 
 MAX_COUNTDOWN_MINUTES = 1440
+CONDITION_COUNTDOWN_SECONDS = 120
 
 
 @dataclass(frozen=True)
 class PowerTarget:
-    mode: Literal["limits", "work"]
+    mode: Literal["limits", "work", "timer"]
     thread_id: str | None = None
     goal_signature: str | None = None
     turn_id: str | None = None
@@ -85,13 +86,15 @@ class ShutdownPlan:
             raise ValueError("Cancel the current shutdown plan before changing its countdown.")
         self.seconds = seconds
 
-    def arm(self, target: PowerTarget) -> None:
-        if target.mode not in {"limits", "work"} or (
+    def arm(self, target: PowerTarget, *, now: float = 0.0) -> None:
+        if target.mode not in {"limits", "work", "timer"} or (
             target.mode == "work" and (not target.thread_id or not target.turn_id)
         ):
             raise ValueError("Select a verified running conversation first.")
         self.cancel()
         self.target = target
+        if target.mode == "timer":
+            self.deadline = now + self.seconds
         self.reason = "Waiting for the selected condition."
 
     def cancel(self) -> None:
@@ -102,7 +105,7 @@ class ShutdownPlan:
         self.reason = "Shutdown is off."
 
     def observe(self, evidence: PowerEvidence, now: float) -> None:
-        if self.target is None:
+        if self.target is None or self.target.mode == "timer":
             return
         if self.checked_at is None or now - self.checked_at > 30:
             self.deadline = None
@@ -113,9 +116,11 @@ class ShutdownPlan:
             self.identity = ""
         elif self.deadline is None or self.identity != evidence.identity:
             self.identity = evidence.identity
-            self.deadline = now + self.seconds
+            self.deadline = now + CONDITION_COUNTDOWN_SECONDS
 
     def remaining(self, now: float) -> int | None:
+        if self.target is not None and self.target.mode == "timer":
+            return None if self.deadline is None else max(0, math.ceil(self.deadline - now))
         if self.checked_at is not None and now - self.checked_at > 30:
             self.deadline = None
             self.reason = "Waiting for a fresh check."
@@ -125,6 +130,21 @@ class ShutdownPlan:
 class PowerChecks:
     def __init__(self, accounts: AccountService):
         self.accounts = accounts
+
+    async def conversations(self) -> list[tuple[str, str]]:
+        adapter = CodexAppServer(paths.shared_codex_home, experimental=True)
+        try:
+            async with asyncio.timeout(15):
+                await adapter.start()
+                threads = await adapter.list_threads(max_items=1000)
+                tracked = {work.thread_id for work in await WorkTracker().visible()}
+                return [
+                    (thread.id, thread.title or thread.preview or thread.id[:12])
+                    for thread in threads
+                    if thread.id in tracked or thread.status not in {"idle", "notLoaded"}
+                ]
+        finally:
+            await adapter.aclose()
 
     async def _turn(self, adapter: CodexAppServer, thread_id: str) -> dict | None:
         source = await adapter.thread_source(thread_id)
@@ -149,7 +169,12 @@ class PowerChecks:
                 await adapter.start()
                 turn = await self._turn(adapter, thread_id)
                 goal = await adapter.get_goal(thread_id)
-                if not turn or turn.get("status") != "inProgress" or goal is None:
+                if (
+                    not turn
+                    or turn.get("blocked")
+                    or turn.get("status") != "inProgress"
+                    or goal is None
+                ):
                     raise ValueError("Select a verified running conversation first.")
                 if goal.present and goal.status != "active":
                     raise ValueError("Select a verified running conversation first.")
@@ -163,6 +188,8 @@ class PowerChecks:
             await adapter.aclose()
 
     async def check(self, target: PowerTarget) -> PowerEvidence:
+        if target.mode == "timer":
+            raise ValueError("Timer plans do not use work or account checks.")
         adapter = CodexAppServer(paths.shared_codex_home, experimental=True)
         try:
             async with asyncio.timeout(20):
@@ -187,7 +214,9 @@ class PowerChecks:
                     ):
                         return PowerEvidence(False, "Work is active or could not be verified.")
                     goal = await adapter.get_goal(thread_id)
-                    if goal is None or (goal.present and goal.status == "active"):
+                    if goal is None or (
+                        target.mode == "work" and goal.present and goal.status == "active"
+                    ):
                         return PowerEvidence(False, "Work is active or could not be verified.")
                     if thread_id == target.thread_id:
                         selected_turn = turn

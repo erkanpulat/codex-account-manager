@@ -8,16 +8,15 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QPlainTextEdit, QWidget
+from PySide6.QtWidgets import QDialog, QLineEdit, QPlainTextEdit, QWidget
 
 from codex_account_manager.gui.dialogs import ChoiceDialog, EntryDialog, choose_item, prompt_text
 
 
 @pytest.fixture(scope="module")
-def app():
-    instance = QApplication.instance() or QApplication([])
-    instance.setStyle("Fusion")
-    return instance
+def app(qt_app):
+    qt_app.setStyle("Fusion")
+    return qt_app
 
 
 def test_short_entry_size_validation_and_initial_value(app):

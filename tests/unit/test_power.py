@@ -23,11 +23,14 @@ def test_shutdown_requires_arming_and_fresh_continuous_evidence():
     assert plan.remaining(100) is None
     plan.arm(PowerTarget("limits"))
     plan.observe(good, 0)
-    assert plan.remaining(10) == 50
+    assert plan.remaining(10) == 110
     plan.observe(good, 20)
     plan.observe(good, 40)
     plan.observe(good, 60)
-    assert plan.remaining(60) == 0
+    plan.observe(good, 80)
+    plan.observe(good, 100)
+    plan.observe(good, 120)
+    assert plan.remaining(120) == 0
     plan.cancel()
     assert plan.target is None and plan.remaining(60) is None
 
@@ -38,9 +41,9 @@ def test_sleep_stale_evidence_and_changed_accounts_reset_countdown():
     plan.observe(PowerEvidence(True, "done", "a"), 0)
     assert plan.remaining(31) is None
     plan.observe(PowerEvidence(True, "done", "a"), 35)
-    assert plan.remaining(35) == 60
+    assert plan.remaining(35) == 120
     plan.observe(PowerEvidence(True, "done", "a-b"), 45)
-    assert plan.remaining(45) == 60
+    assert plan.remaining(45) == 120
     plan.observe(PowerEvidence(False, "network failed"), 50)
     assert plan.remaining(50) is None
 
@@ -51,16 +54,24 @@ def test_countdown_has_bounds(seconds):
         ShutdownPlan(seconds)
 
 
-@pytest.mark.parametrize("minutes", [120, 180, 1440])
-def test_long_countdown_keeps_deadline_with_continuous_verification(minutes):
+@pytest.mark.parametrize("minutes", [1, 120, 180, 1440])
+def test_timer_uses_total_duration_without_fresh_evidence(minutes):
     plan = ShutdownPlan(minutes * 60)
-    plan.arm(PowerTarget("limits"))
-    evidence = PowerEvidence(True, "limited", "same-accounts")
-    for second in range(0, minutes * 60 + 1, 15):
-        plan.observe(evidence, second)
-        assert plan.remaining(second) == minutes * 60 - second
+    plan.arm(PowerTarget("timer"), now=100)
+    assert plan.remaining(100) == minutes * 60
+    plan.observe(PowerEvidence(False, "network failed"), 101)
+    assert plan.remaining(101) == minutes * 60 - 1
+    assert plan.remaining(100 + minutes * 60) == 0
     plan.cancel()
-    assert plan.remaining(minutes * 60) is None
+    assert plan.remaining(100 + minutes * 60) is None
+
+
+@pytest.mark.parametrize("mode", ["work", "limits"])
+def test_conditional_modes_always_use_two_minutes(mode):
+    plan = ShutdownPlan(10800)
+    plan.arm(PowerTarget(mode, "thread", None, "turn"))
+    plan.observe(PowerEvidence(True, "done", "identity"), 0)
+    assert plan.remaining(0) == 120
 
 
 def test_countdown_can_change_before_arming_but_not_during_a_plan():
@@ -69,7 +80,7 @@ def test_countdown_can_change_before_arming_but_not_during_a_plan():
     assert plan.seconds == 420
     plan.arm(PowerTarget("limits"))
     plan.observe(PowerEvidence(True, "verified", "accounts"), 10)
-    assert plan.remaining(10) == 420
+    assert plan.remaining(10) == 120
     with pytest.raises(ValueError):
         plan.set_seconds(60)
     plan.cancel()
@@ -156,3 +167,41 @@ async def test_power_checks_reject_unknown_active_and_truncated_work(migrated_db
     checks._turn.return_value = {"id": "turn", "status": "completed"}
     server.get_goal = AsyncMock(return_value=None)
     assert not (await checks.check(PowerTarget("limits"))).ready
+
+
+async def test_limits_mode_allows_stopped_work_with_an_unfinished_goal(migrated_db, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from codex_account_manager.domain.models import ThreadInfo
+    from codex_account_manager.monitoring import power
+    from tests.fakes import ExecutionServer
+
+    server = ExecutionServer()
+    server.list_threads = AsyncMock(
+        return_value=[
+            ThreadInfo("thread", None, None, None, None, None, None, None, None, "active")
+        ]
+    )
+    server.get_goal = AsyncMock(return_value=GoalInfo("thread", "unfinished", "active", True))
+    monkeypatch.setattr(power, "CodexAppServer", lambda *_a, **_k: server)
+    accounts = AsyncMock()
+    accounts.all_health.return_value = [
+        _health("a", allowed=False, quota=QuotaState.LIMITED_NO_RESET)
+    ]
+    checks = power.PowerChecks(accounts)
+    checks._turn = AsyncMock(return_value={"id": "turn", "status": "interrupted"})
+    assert (await checks.check(PowerTarget("limits"))).ready
+    assert not (await checks.check(PowerTarget("work", "thread", None, "turn"))).ready
+    checks._turn.return_value = {"id": "turn", "status": "inProgress"}
+    assert not (await checks.check(PowerTarget("limits"))).ready
+
+
+async def test_timer_never_uses_condition_checks():
+    from unittest.mock import AsyncMock
+
+    from codex_account_manager.monitoring.power import PowerChecks
+
+    accounts = AsyncMock()
+    with pytest.raises(ValueError, match="Timer"):
+        await PowerChecks(accounts).check(PowerTarget("timer"))
+    accounts.all_health.assert_not_called()

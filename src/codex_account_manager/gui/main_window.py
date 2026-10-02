@@ -348,7 +348,8 @@ class MainWindow(QMainWindow):
 
     def _monitoring_changed(self, enabled: bool) -> None:
         self._monitor_message = tr("Monitoring active") if enabled else tr("Monitoring paused")
-        if not enabled and self._monitor_enabled:
+        target = self.power_view.controls.plan.target
+        if not enabled and self._monitor_enabled and target is not None and target.mode != "timer":
             self.power_view.controls.cancel()
         self._monitor_enabled = enabled
         self._policy_changed(self.settings.policy.currentData())
@@ -433,7 +434,11 @@ class MainWindow(QMainWindow):
             self._tray_icon_state = icon_state
 
     def _countdown_started(self) -> None:
-        minutes = self.power_view.controls.plan.seconds // 60
+        import math
+        import time
+
+        remaining = self.power_view.controls.plan.remaining(time.monotonic())
+        minutes = max(1, math.ceil((remaining if remaining is not None else 120) / 60))
         self.tray.showMessage(
             tr("Shutdown countdown started"),
             tr(

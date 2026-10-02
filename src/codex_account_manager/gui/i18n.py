@@ -58,6 +58,23 @@ EN = {
 }
 
 TR = {
+    "When should the computer shut down?": "Bilgisayar ne zaman kapansın?",
+    "Choose one condition. The plan stays active only while QuotaCrew is running.": "Bir kapatma koşulu seçin. Plan yalnızca QuotaCrew açıkken geçerlidir.",
+    "When my selected work finishes": "Seçtiğim iş tamamlandığında",
+    "When all accounts reach their limits": "Tüm hesapların limitleri dolduğunda",
+    "After a set time": "Belirlediğim süre sonunda",
+    "Shut down after (minutes)": "Kapanma süresi (dakika)",
+    "Plan shutdown": "Kapatmayı planla",
+    "You can cancel from this page or the tray. Open applications are not forcibly closed.": "Bu sayfadan veya tepsi menüsünden iptal edebilirsiniz. Açık uygulamalar zorla kapatılmaz.",
+    "Select a running conversation. Once it completes and no other Codex work is active, a 2-minute countdown starts. Errors and requests for input do not count as completion.": "Çalışan bir sohbet seçin. İşin tamamlandığı ve başka bir Codex işinin çalışmadığı doğrulanınca 2 dakikalık geri sayım başlar. Hata veya yanıt bekleme durumu tamamlanma sayılmaz.",
+    "Once every saved account is verified out of available usage and no Codex work is active, a 2-minute countdown starts.": "Tüm kayıtlı hesaplarda kullanılabilir limit kalmadığı ve hiçbir Codex işinin çalışmadığı doğrulanınca 2 dakikalık geri sayım başlar.",
+    "Time starts when you confirm. The last 2 minutes are included in your chosen duration. This mode does not wait for Codex work to finish.": "Süre onayınızla başlar. Son 2 dakikalık uyarı seçtiğiniz süreye dahildir; ek süre eklenmez. Bu mod Codex işlerinin bitmesini beklemez.",
+    "No running conversations found. Open your conversation and refresh.": "Çalışan sohbet bulunamadı. Sohbetinizi açıp listeyi yenileyin.",
+    "Conversations could not be loaded. Keep Codex or your IDE open and refresh.": "Sohbetler yüklenemedi. Codex veya IDE açıkken yeniden deneyin.",
+    "Verifying selected work…": "Seçilen iş doğrulanıyor…",
+    "Shut down in {minutes} minutes from now, even if Codex work is still running? Save work in other applications.": "Codex işleri sürse bile bilgisayar şu andan itibaren {minutes} dakika sonra kapatılsın mı? Diğer uygulamalardaki çalışmalarınızı kaydedin.",
+    "Timed shutdown in {time}. Codex work will not delay it.": "Bilgisayar {time} sonra kapanacak. Codex işleri bu süreyi uzatmaz.",
+    "Finish your work, use your remaining limits or choose a shutdown time.": "İş tamamlandığında, limitler dolduğunda veya belirlediğiniz süre sonunda bilgisayarı kapatın.",
     "Support the project": "Projeye destek olun",
     "Star on GitHub": "GitHub'da yıldız ver",
     "Report an issue": "Sorun bildir",

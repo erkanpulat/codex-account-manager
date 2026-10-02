@@ -15,6 +15,14 @@ import importlib
 import pytest
 
 
+@pytest.fixture(scope="session")
+def qt_app():
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    return app
+
+
 @pytest.fixture(autouse=True)
 def tmp_paths(tmp_path):
     """Redirect all app paths into a temporary directory (incl. Unicode)."""

@@ -42,7 +42,7 @@ With monitoring and the relevant continuation option enabled, QuotaCrew detects 
 
 Accounts and conversations are checked again during the handoff. Depending on the monitoring interval and application startup time, this can take a few minutes. The existing goal, instructions and budget stay in place; approval steps remain under your control. A problem in one independent conversation does not prevent other eligible conversations from continuing.
 
-> **About continuation:** Automatic Desktop and IDE continuation is experimental in 0.2.0 and depends on the connection support in your installed Codex version. QuotaCrew sends a request after verifying eligible work and its conversation connection; it reports when approval or a user response is needed.
+> **About continuation:** Automatic Desktop and IDE continuation is experimental and depends on the connection support in your installed Codex version. QuotaCrew sends a request after verifying eligible work and its conversation connection; it reports when approval or a user response is needed.
 
 <details>
 <summary>The continuation request and connection details</summary>
@@ -91,7 +91,7 @@ QuotaCrew does not install a VS Code extension. **Open project in editor** opens
 
 **Python included · No Node.js required · Existing Codex history preserved**
 
-1. **Download and open.** Get `QuotaCrew-Setup-0.2.0.exe` from the [latest release](https://github.com/erkanpulat/codex-quotacrew/releases/latest) and install it. For portable use, extract the entire ZIP into a folder and open `QuotaCrew.exe`.
+1. **Download and open.** Get `QuotaCrew-Setup-0.2.1.exe` from the [latest release](https://github.com/erkanpulat/codex-quotacrew/releases/latest) and install it. For portable use, extract the entire ZIP into a folder and open `QuotaCrew.exe`.
 2. **Choose your preferences.** The first-run assistant introduces monitoring, switching, continuation and tray options. If Codex CLI is missing, it offers the official Windows installation with your consent; an existing CLI installation is preserved.
 3. **Add your accounts.** Open **My accounts → Add account** and give the account a recognizable name. Complete sign-in in the terminal and default browser that open, then add your other accounts and refresh their quotas.
 
@@ -121,7 +121,7 @@ Windows packages are not code-signed. `SHA256SUMS.txt` contains the release file
 
 Search local conversations by project, source, title or folder and open the project in your editor. `Ctrl+F` focuses search; `Ctrl+R` refreshes the page. **Clear tracking** clears QuotaCrew's observations and pauses monitoring; it preserves Codex conversation history. Stop a running conversation with Codex's own **Stop** action.
 
-**Automatic shutdown** starts a cancellable countdown after all saved accounts are verified limited or your selected work is verified complete. Choose **1–1440 minutes**: 120 minutes is two hours; 180 is three hours. You enable it with confirmation each session, and open applications are not forcibly closed. [Shutdown conditions](docs/continuity.md#optional-windows-shutdown).
+**Automatic shutdown** gives you three clear choices: finish a selected conversation, exhaust all saved accounts' available limits, or shut down after a set time. Work and limit conditions start a fixed **2-minute cancellation countdown** once verified and no other Codex work is active. The timer accepts **1–1440 minutes** (120 = two hours), including the final warning, and does not wait for work to finish. Plans require confirmation, last only for the current session and never forcibly close applications. [Shutdown conditions](docs/continuity.md#optional-windows-shutdown).
 
 <details>
 <summary>Conversation history, account creation, reset credits and shutdown</summary>

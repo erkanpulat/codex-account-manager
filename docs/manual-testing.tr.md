@@ -136,12 +136,14 @@ Gerçek kapatmayı yalnızca son senaryoda, ayrı test oturumunda, diğer çalı
 
 | Test | Adım | Beklenen sonuç |
 | --- | --- | --- |
-| Süre | 1/10/120/180/1440 girin; 0/1441 deneyin. | Sınır 1–1440, dakika birimi ve saat örnekleri görünür; süre değiştirmek plan başlatmaz. |
+| Süre | Süreli modu seçip 1/10/120/180/1440 girin; 0/1441 deneyin. | Sınır 1–1440, dakika birimi ve saat örnekleri görünür; süre değiştirmek plan başlatmaz. |
+| Toplam süre | Süreli modda 1 dakika planlayıp uyarıyı inceleyin ve iptal edin. | Uyarı hemen başlar; ek 2 dakika eklenmez. Hesap bağlantısı ve izleme ayarı süreyi değiştirmez. |
+| Koşul süresi | İş ve limit modlarına geçin. | Süre alanı gizlidir; doğrulama sonrası sabit 2 dakika sayılır. |
 | Onay/iptal | Onayı reddedin; sonraki denemede kabul edip pencere/tepsiden iptal edin. | Ret kapalı bırakır; kabul görünür plan oluşturur; iki yerden iptal çalışır. |
 | Tüm limitler | Gerçek sınırlı hesaplarla koşulu deneyin. | Kullanılabilir/bilinmeyen/eski kota, kullanılabilir sıfırlama hakkı veya çalışan iş geri sayımı engeller. |
-| Seçilen iş | Çalışan test konuşmasında Bu iş bitince kapat'ı seçin. | Aynı tur/hedef beklenir; başka çalışan Codex işi varken kapanmaz; değişen hedef tamamlanma sayılmaz. |
-| Tazelik | Geri sayımda doğrulama bağlantısını kesin. | Kanıt kaybolunca geri sayım sıfırlanır; eski kanıtla kapatılmaz. |
-| Oturum | Planı açıp izlemeyi duraklatın veya uygulamadan çıkın. | Plan iptal olur; yeniden açılışta kapalıdır. Tepsi modunda pencereyi gizlemek çıkış değildir. |
+| Seçilen iş | Kapatma sayfasından çalışan bir sohbet seçin; iş menüsündeki kısayolu da deneyin. | Aynı tur/hedef beklenir; başka çalışan Codex işi varken kapanmaz; değişen hedef tamamlanma sayılmaz. |
+| Tazelik | İş veya limit modunda geri sayım sırasında doğrulama bağlantısını kesin. | Kanıt kaybolunca geri sayım sıfırlanır; eski kanıtla kapatılmaz. |
+| Oturum | Her modda izlemeyi duraklatmayı ve uygulamadan çıkmayı deneyin. | İzlemeyi duraklatmak koşullu planları iptal eder, süreli planı etkilemez. Uygulamadan çıkmak tüm planları iptal eder; yeniden açılışta kapalıdır. Tepsi modunda pencereyi gizlemek çıkış değildir. |
 | Gerçek yürütme | Ayrı oturumda koşulu sağlayıp kısa süreyle bekleyin. | Son kontrol sonrası Windows kapatma ister; uygulamalar zorla kapanmaz. Windows kaydedilmemiş iş için kapatmayı engelleyebilir. |
 
 120/180 dakikayı tamamen beklemek gerekmez: uzun süre sınırları otomatik testlerde var. Elle giriş/gösterim/iptali doğrulayın; gerçek yürütmeyi kısa süreyle deneyin. Bu özellik diğer uygulamalardaki kaydedilmemiş işi algılamaz.

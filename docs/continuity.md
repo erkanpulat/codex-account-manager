@@ -167,8 +167,14 @@ The Desktop relay label is not evidence of IDE delivery. Jobs → row menu → *
 
 ## Optional Windows shutdown
 
-Shutdown is disabled by default and never persisted. Each application session needs explicit confirmation for one condition: all saved accounts have verified limits, or a selected running conversation's exact turn/goal finishes. Available reset credits, unknown/stale quota, a changed goal, missing runtime information or observed running work prevent shutdown.
+Shutdown is off by default and never persisted. Each application session needs explicit confirmation for one of three modes:
 
-The countdown accepts 1–1440 minutes and defaults to two minutes; 120 minutes is two hours and 180 minutes is three hours. It starts only after the selected condition is verified. The app checks every 60 seconds while waiting, every 15 seconds during the countdown, and once more before executing. Missing fresh evidence resets the countdown. The bottom notice and tray clock/menu expose the plan; both can cancel it. Quitting, closing without tray mode, or pausing active monitoring cancels it. This only observes supported local Codex work, not unsaved documents or activity in other programs. A new task can still start after the final check.
+- **Selected work:** choose a conversation on the shutdown page or use its work-menu action. Its exact turn or goal must complete successfully. Errors, limits, changed goals and requests for input are not completion.
+- **All limits:** every saved account must have freshly verified exhausted usage and no available reset credits. An unfinished goal alone does not prevent this mode once its turn has stopped; a running or unverified turn does.
+- **Timer:** choose 1–1440 minutes from confirmation (120 minutes = two hours). The last two minutes are the warning period, included in the total duration. A one-minute plan warns immediately. This mode is independent of account checks, continuation and monitoring, and does not wait for Codex work to finish.
+
+Work and limit modes wait for other observed Codex work to stop, then start a fixed 120-second countdown. Checks run every 60 seconds while waiting, every 15 seconds during the countdown, and once more before execution. Missing fresh evidence resets that countdown. Unknown quota, missing runtime information or work that cannot be verified keep the plan waiting.
+
+The page, application banner and tray menu show the active plan and allow cancellation. Quitting or closing without tray mode cancels every plan. Pausing monitoring cancels conditional plans but leaves an explicitly scheduled timer running. This only observes supported local Codex work, not unsaved documents or activity in other programs. A new task can still start after the final check.
 
 The fixed Windows command uses the system `shutdown.exe /s /t 0` with no `/f`, shell, elevation or background helper. The countdown belongs to QuotaCrew: using a positive Windows `/t` would implicitly force applications closed. Windows may refuse or delay shutdown when applications need attention. Tests replace the shutdown function; the test suite never shuts down the machine.

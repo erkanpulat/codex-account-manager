@@ -4,7 +4,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6")
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtWidgets import QMessageBox
 from scripts.render_preview import PreviewRunner
 
 from codex_account_manager.gui.onboarding import SetupDialog, needs_setup
@@ -12,13 +13,13 @@ from codex_account_manager.storage.repositories import SettingsRepository
 
 
 @pytest.fixture
-def dialog():
-    app = QApplication.instance() or QApplication([])
+def dialog(qt_app):
     setup = SetupDialog(PreviewRunner())
     setup.cli._checked("0.143.0")
     yield setup
     setup.close()
-    app.processEvents()
+    setup.deleteLater()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
 
 async def test_fresh_setup_defers_preferences_until_explicit_save(migrated_db, dialog):

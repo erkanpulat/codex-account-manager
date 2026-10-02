@@ -657,7 +657,7 @@ async def test_two_desktop_and_one_ide_limit_continue_after_committed_switch(
     if ide_failure == "running":
         turns["vscode"] = {"id": "last", "status": "inProgress"}
     if ide_failure == "timeout":
-        monkeypatch.setattr(cs, "THREAD_SCAN_TIMEOUT", 0.5)
+        monkeypatch.setattr(cs, "THREAD_SCAN_TIMEOUT", 5)
         monkeypatch.setattr(cs, "THREAD_CHECK_TIMEOUT", 10)
     if ide_failure == "preparation":
         original_prepare = service.automation.prepare
