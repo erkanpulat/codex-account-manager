@@ -6,8 +6,9 @@ import asyncio
 import os
 import sys
 
-from codex_account_manager.core.errors import AccountRecoveryRequired
+from codex_account_manager.core.errors import AccountRecoveryRequired, TransactionError
 from codex_account_manager.core.logging import configure_logging, get_logger
+from codex_account_manager.core.protection import CredentialProtectionError
 from codex_account_manager.core.windows_shell import set_application_identity
 from codex_account_manager.storage.database import initialize_database
 
@@ -37,7 +38,21 @@ def run_gui() -> int:
         return 1
     from codex_account_manager.auth.transaction import AuthTransaction
 
-    AuthTransaction().recover()
+    try:
+        AuthTransaction().recover()
+    except (CredentialProtectionError, TransactionError, OSError, ValueError):
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        QMessageBox.critical(
+            None,
+            "QuotaCrew",
+            "Stored sign-in data could not be recovered safely. Your files were retained. "
+            "Use the original Windows user account and close other account operations before retrying.\n\n"
+            "Kaydedilmiş giriş bilgileri güvenli biçimde kurtarılamadı. Dosyalarınız korundu. "
+            "Özgün Windows hesabını kullanın ve yeniden denemeden önce diğer hesap işlemlerini kapatın.",
+        )
+        return 1
 
     from PySide6.QtCore import QLibraryInfo, QLocale, QTranslator
     from PySide6.QtGui import QFontDatabase

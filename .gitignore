@@ -1,6 +1,10 @@
 # --- Secrets & credentials (never commit) ---
 auth.json
 *.auth.json
+*.dpapi
+*.pfx
+*.p12
+*.key
 *.token
 *.jwt
 .env
@@ -66,3 +70,11 @@ codex-quotacrew-source*.zip
 # Local scratch work and development tools
 /scratch/
 /.tools/
+
+# Local Store submission identity, working notes and design references
+/packaging/store/identity.json
+/packaging/store/validation.tr.md
+/packaging/store/onboarding-followups.tr.md
+/packaging/store/certification-notes.md
+/packaging/store/listing.tr.md
+/docs/design/

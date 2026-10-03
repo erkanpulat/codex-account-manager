@@ -30,6 +30,34 @@ QWidget#Sidebar {{
 }}
 QWidget#Content {{ background: {content_bg}; border: none; }}
 QWidget#GridHost {{ background: transparent; border: none; }}
+QWidget#SetupSidebar {{ background: {sidebar_bg}; border-right: 1px solid {p.border}; }}
+QFrame#SetupConnector {{ background: {p.border}; }}
+QDialog#SetupDialog QLabel#Caption {{ font-size: 14px; }}
+QDialog#SetupDialog QLabel#SetupStepLabel {{ font-size: 17px; }}
+QDialog#SetupDialog QFrame#SettingRow QLabel#FieldTitle {{ font-size: 16px; }}
+QDialog#SetupDialog QFrame#SettingRow {{ border-bottom: 1px solid {p.border}; }}
+QDialog#SetupDialog QPushButton#Primary {{ min-width: 96px; min-height: 28px; }}
+QLabel#SetupMark {{ color: {p.primary}; font-size: 48px; font-weight: 800; }}
+QLabel#SetupBrand {{ font-size: 23px; font-weight: 700; }}
+QLabel#SetupTitle {{ font-size: 32px; font-weight: 700; }}
+QLabel#SetupStepNumber {{ border: 1px solid {p.border}; border-radius: 18px; color: {p.muted}; font-size: 17px; font-weight: 600; }}
+QLabel#SetupStepNumber[state="current"] {{ background: {p.primary}; color: {p.on_primary}; border-color: {p.primary}; }}
+QLabel#SetupStepNumber[state="done"] {{ color: {p.success}; border-color: {p.success}; }}
+QLabel#SetupStepLabel {{ font-size: 16px; color: {p.muted}; }}
+QLabel#SetupStepLabel[state="current"] {{ color: {p.text}; font-weight: 600; }}
+QFrame#SetupCard {{ background: {p.surface}; border: 1px solid {p.border}; border-radius: 12px; }}
+QLabel#SetupCardTitle {{ font-size: 24px; font-weight: 600; }}
+QLabel#CliIcon {{ background: {p.bg}; border-radius: 12px; font-size: 30px; font-weight: 600; }}
+QLabel#SetupPhase {{ border-top: 1px solid {p.border}; padding-top: 14px; color: {p.muted}; }}
+QLabel#SetupPhase[state="current"] {{ color: {p.primary}; }}
+QLabel#SetupPhase[state="done"] {{ color: {p.success}; }}
+QPushButton#SetupLink {{ background: transparent; border: none; color: {p.primary}; padding: 0; }}
+QProgressBar#CliProgress::chunk {{ background: {p.primary}; border-radius: 4px; }}
+QLabel#CliStatus {{ color: {p.primary}; font-size: 16px; }}
+QFrame#SetupPhaseRow {{ border-top: 1px solid {p.border}; }}
+QLabel#SetupPhaseMark {{ color: {p.muted}; font-size: 32px; border-radius: 19px; }}
+QLabel#SetupPhaseMark[state="done"] {{ background: {p.success}; color: {p.bg}; font-size: 24px; }}
+QLabel#SetupPhaseMark[state="current"] {{ color: {p.primary}; }}
 
 QFrame#Topbar {{
     background: {card_bg};
@@ -48,6 +76,15 @@ QPushButton#SidebarAction:checked {{ background: {selected_bg}; color: {p.primar
 QLabel#HeroTitle {{ font-size: 22px; font-weight: 600; }}
 QLabel#H1 {{ font-size: 26px; font-weight: 600; }}
 QLabel#H2 {{ font-size: 18px; font-weight: 600; }}
+QFrame#PowerControls {{ background: {p.bg}; }}
+QPushButton#PowerChoice {{ background: {p.surface}; border: 1px solid {p.border}; border-radius: 12px; padding: 0; }}
+QPushButton#PowerChoice:checked {{ background: {primary_bg}; border: 2px solid {p.primary}; }}
+QPushButton#PowerChoice:hover {{ border-color: {p.primary}; }}
+QPushButton#PowerChoice QLabel {{ background: transparent; }}
+QPushButton#PowerChoice QLabel#FieldTitle {{ font-size: 16px; }}
+QPushButton#PowerPreset:checked {{ background: {primary_bg}; color: {p.primary}; border-color: {p.primary}; }}
+QLabel#PowerChoiceMark {{ color: {p.primary}; font-size: 22px; }}
+QLabel#PowerClock {{ color: {p.primary}; font-size: 32px; font-weight: 600; }}
 QLabel#Step {{ font-size: 24px; font-weight: 700; color: {p.primary}; letter-spacing: -0.5px; }}
 
 QLabel#Eyebrow {{ color: {p.muted}; font-size: 12px; font-weight: 700; letter-spacing: 0.3px; }}

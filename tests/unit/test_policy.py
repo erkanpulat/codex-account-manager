@@ -1,4 +1,7 @@
+from dataclasses import replace
 from datetime import UTC, datetime
+
+import pytest
 
 from codex_account_manager.continuity.policy import (
     AvailabilityFailoverPolicy,
@@ -77,3 +80,36 @@ def test_resolve_policy_by_kind():
     assert isinstance(resolve_policy(SwitchPolicyKind.MANUAL), SwitchPolicy)
     assert isinstance(resolve_policy("confirm"), ConfirmPolicy)
     assert isinstance(resolve_policy("availability_failover"), AvailabilityFailoverPolicy)
+
+
+@pytest.mark.parametrize("policy", [ConfirmPolicy(), AvailabilityFailoverPolicy()])
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"plan_type": "free"},
+        {"plan_type": " FREE "},
+        {"plan_type": None},
+        {"plan_type": "new-unverified-plan"},
+        {"primary_used_percent": None},
+        {"secondary_used_percent": None},
+        {"primary_used_percent": float("nan")},
+        {"secondary_used_percent": float("inf")},
+        {"primary_used_percent": -1},
+        {"secondary_used_percent": 101},
+        {"ordinary_usage_allowed": None},
+        {"primary_used_percent": True},
+    ],
+)
+def test_automatic_and_suggested_targets_reject_free_or_unknown_capacity(policy, changes):
+    current = _health("current", active=True, allowed=False, quota=QuotaState.LIMITED_NO_RESET)
+    uncertain = replace(_health("apparently-empty"), **changes)
+    paid = _health("verified-paid", primary=60, secondary=80)
+    assert policy.decide(current, [uncertain, paid]).target == paid
+    assert not policy.decide(current, [uncertain]).should_switch
+
+
+def test_free_remains_manually_usable_and_actual_zero_usage_remains_valid():
+    free = replace(_health("free"), plan_type="free")
+    assert SwitchPolicy._is_available(free)
+    paid_zero = _health("paid-zero")
+    assert SwitchPolicy()._best_candidate(None, [free, paid_zero]) == paid_zero

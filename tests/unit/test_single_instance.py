@@ -12,3 +12,20 @@ def test_second_instance_is_blocked(tmp_paths):
     third = SingleInstance(name)
     assert third.acquire() is True
     third.release()
+
+
+def test_isolated_data_home_does_not_collide_with_daily_app(tmp_paths, monkeypatch):
+    monkeypatch.delenv("WIN_PD_OVERRIDE_LOCAL_APPDATA", raising=False)
+    daily = SingleInstance().name
+    assert daily == "Local\\CodexAccountManagerSingleton"
+    monkeypatch.setenv("WIN_PD_OVERRIDE_LOCAL_APPDATA", str(tmp_paths.data_dir))
+    assert SingleInstance().name != daily
+    first = SingleInstance()
+    second = SingleInstance()
+    assert first.name == second.name
+    assert SingleInstance("Local\\ExplicitName").name == "Local\\ExplicitName"
+    assert first.acquire()
+    try:
+        assert not second.acquire()
+    finally:
+        first.release()

@@ -60,6 +60,22 @@ def main() -> None:
         destination = Path(temporary) / "application"
         flags = ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
         try:
+            previous = os.environ.get("QUOTACREW_PREVIOUS_INSTALLER")
+            if previous:
+                subprocess.run(
+                    [
+                        str(Path(previous).resolve(strict=True)),
+                        *flags,
+                        f"/DIR={destination}",
+                        "/TASKS=",
+                    ],
+                    check=True,
+                    timeout=180,
+                )
+                if not (destination / "QuotaCrew.exe").is_file():
+                    raise RuntimeError("Previous version did not install for upgrade verification.")
+                if sentinel.read_bytes() != expected:
+                    raise RuntimeError("Previous installation modified user data.")
             subprocess.run(
                 [
                     str(installers[0].resolve()),

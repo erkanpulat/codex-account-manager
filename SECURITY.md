@@ -10,7 +10,7 @@ Include the affected version, platform, reproduction steps using synthetic data,
 
 ## Storage and guarantees
 
-QuotaCrew restricts newly written credential files to the current user, uses atomic replacement, serializes account mutations, and keeps a durable recovery snapshot during switching. Files are not encrypted and same-user software can access them. Token-shaped text and email addresses are redacted from logs, including tracebacks, while diagnostic exports omit raw text entirely.
+On Windows, QuotaCrew uses current-user DPAPI for managed profile credentials (`auth.dpapi`) and durable switch recovery snapshots. Encryption is round-trip verified before a plaintext profile is removed; errors never silently fall back to plaintext. The official Codex process uses a temporary restricted `auth.json`; after the process exits, the latest token is sealed. The active shared Codex file remains plaintext for compatibility. SQLite metadata/backups are not encrypted. Non-Windows source installations retain the file-permission model. Token-shaped text and email addresses are redacted from logs, including tracebacks, while diagnostic exports omit raw text entirely.
 
 Recovery snapshots intentionally contain credentials and are excluded from exports and Git. SQLite stores account identifiers and conversation metadata but is not a credential store. Verified account emails are held in memory for optional display; they are omitted from snapshot representations and diagnostic exports.
 
@@ -23,7 +23,9 @@ QuotaCrew is a local desktop utility operating with the current user's permissio
 ### Protected boundaries
 
 - Credential writes use randomly named exclusive temporary files, restricted ACLs or Unix `0600`, file flush/fsync and atomic replacement. Temporary files are removed after errors.
-- Recovery snapshots include credentials and configuration as base64, which is encoding, not encryption. They receive the same restricted access and are removed after commit or successful rollback.
+- Recovery snapshots include credentials and configuration inside a user-scoped DPAPI envelope on Windows. Existing legacy JSON snapshots are encrypted before recovery attempts. Snapshots are removed after commit or successful rollback; unreadable snapshots are retained without modifying active credentials.
+- A per-profile OS lock spans the entire owned CLI process lifetime. Windows job objects terminate assigned children when QuotaCrew dies. A crash can leave a restricted plaintext working file; idle profiles are resealed at the next GUI startup or access. There is a small process-start/job-assignment interval, and a system crash prevents cleanup. These mechanisms do not promise zero plaintext exposure or secure erasure on physical media.
+- Old plaintext profiles migrate on startup/access. A failed migration retains its usable original and reports the failure. Pre-DPAPI versions cannot read `auth.dpapi`; downgrading can require signing in again. Windows account/key loss can also require reauthentication. Reauthentication preserves an existing vault until a new login is written.
 - A non-blocking OS file lock excludes account health batches from concurrent account mutations. Per-home read locks also prevent overlapping QuotaCrew authentication reads. Only managed inactive profiles permit one Codex-owned refresh after a 401 response; the shared home is never force-refreshed by this client. These locks do not coordinate other applications.
 - A non-blocking OS file lock excludes concurrent account mutations. Cancellation triggers rollback; process death leaves a durable recovery snapshot.
 - Profile deletion verifies that the resolved directory is a direct child of managed profiles. Shared homes, external directories and redirected paths are rejected.
@@ -56,7 +58,7 @@ delivery claims and recovery snapshots are not pruned with that history.
 
 ## Limits
 
-Malware or another process running as the same OS user can read these files. Credentials are not encrypted at rest. Disk encryption and OS account security remain relevant. QuotaCrew cannot coordinate writes made by independently running Codex clients; avoid changing accounts elsewhere during a switch. Stop/save active work before switching.
+Malware or another process running as the same OS user can invoke DPAPI, inspect memory or read the active shared Codex file. DPAPI protects application-owned secrets at rest from other users; it does not isolate applications running under the same user. Disk encryption and OS account security remain relevant. QuotaCrew cannot coordinate writes made by independently running Codex clients or an older QuotaCrew version that ignores the profile lock; avoid running old and new builds against the same account data. Stop/save active work before switching.
 
 Recovery covers auth/configuration files and Desktop restart attempts. Native goal writes and unrelated client activity are not a distributed transaction. A failed OS launch or unavailable Codex service can require manual recovery; diagnostics report pending snapshots.
 

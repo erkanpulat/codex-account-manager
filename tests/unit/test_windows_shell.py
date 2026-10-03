@@ -92,3 +92,44 @@ def test_gui_entry_delegates_once_before_initializing_state(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["QuotaCrew.exe", windows_shell.SHELL_LAUNCH_ARGUMENT])
     assert not windows_shell.delegate_gui_launch()
     assert len(launches) == 1
+
+
+def test_installed_desktop_shortcut_never_replaces_an_existing_file(tmp_path, monkeypatch):
+    from codex_account_manager.core import windows_shell
+
+    monkeypatch.setattr(windows_shell.package, "current_package", lambda: None)
+    existing = tmp_path / "QuotaCrew.lnk"
+    existing.write_bytes(b"someone's existing shortcut")
+    with pytest.raises(FileExistsError):
+        windows_shell.create_desktop_shortcut(destination=tmp_path)
+    assert existing.read_bytes() == b"someone's existing shortcut"
+
+
+def test_msix_shortcut_uses_application_activation_identity(tmp_path, monkeypatch):
+    import pythoncom
+    from win32com.shell import shell
+
+    from codex_account_manager.core import windows_shell
+    from codex_account_manager.platform.package import PackageIdentity
+
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    identity = PackageIdentity(
+        "synthetic-full-name", "DRYAPPTR.QuotaCrew.Development_test", tmp_path
+    )
+    monkeypatch.setattr(windows_shell.package, "current_package", lambda: identity)
+    real_parse = shell.SHParseDisplayName
+    requested = []
+
+    def parse(name, *_):
+        requested.append(name)
+        return real_parse(str(tmp_path), 0, None)
+
+    monkeypatch.setattr(shell, "SHParseDisplayName", parse)
+    path = windows_shell.create_desktop_shortcut(destination=tmp_path)
+    assert requested == ["shell:AppsFolder\\DRYAPPTR.QuotaCrew.Development_test!App"]
+    assert path.name == "QuotaCrew (Development).lnk"
+    shortcut = pythoncom.CoCreateInstance(
+        shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink
+    )
+    shortcut.QueryInterface(pythoncom.IID_IPersistFile).Load(str(path))
+    assert shortcut.GetIDList()

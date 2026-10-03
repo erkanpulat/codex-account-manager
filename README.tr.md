@@ -151,7 +151,7 @@ Kullanıcılara güncelleme sunmak için daha yüksek numaralı kararlı bir Git
 
 Hesap profilleri, ayarlar ve takip kayıtları bilgisayarınızda saklanır. Mevcut Codex sohbetleriniz ortak `~/.codex` klasöründe kalır; kurulum, güncelleme ve uygulamayı kaldırma bu geçmişi silmez. Veri konumlarını **Sistem Kontrolü** bölümünden görebilirsiniz.
 
-QuotaCrew telemetri toplamaz veya giriş bilgilerinizi kendi sunucusuna göndermez. Codex, giriş ve hesap bilgileri için OpenAI'a bağlanır. Giriş dosyaları erişim izinleriyle korunur; şifrelenmez. Tanılama dışa aktarımı giriş bilgilerini, veritabanını ve konuşma metnini içermez. E-posta adreslerini arayüzde gizleyebilirsiniz. [Güvenlik ve veri koruma](SECURITY.md).
+QuotaCrew telemetri toplamaz veya giriş bilgilerinizi kendi sunucusuna göndermez. Codex, giriş ve hesap bilgileri için OpenAI'a bağlanır. Windows'ta kayıtlı profil giriş bilgileri ve hesap geçişi kurtarma verileri kullanıcıya bağlı DPAPI ile şifrelenir. Codex süreci çalışırken profil geçici olarak çözülür; kesintiden kalan dosyalar kurtarma sırasında yeniden korunur. Ortak Codex giriş dosyası ve yerel SQLite metadata'sı erişim izinleriyle korunur, şifrelenmez. Tanılama dışa aktarımı giriş bilgilerini, veritabanını ve konuşma metnini içermez. E-posta adreslerini arayüzde gizleyebilirsiniz. [Güvenlik ve veri koruma](SECURITY.md).
 
 ## Geliştirme ve katkı
 

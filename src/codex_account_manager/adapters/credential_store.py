@@ -1,16 +1,8 @@
-"""File-based credential store for the shared Codex home.
+"""DPAPI-protected Windows profiles and atomic shared Codex credential writes.
 
-Codex reads ``auth.json`` from ``~/.codex`` (the shared home). Profiles keep
-their own copy of ``auth.json`` under their profile dir. Switching means copying
-a profile's ``auth.json`` into the shared home *atomically*.
-
-This module only ever moves opaque bytes. It never parses, logs, or exposes the
-credential contents, and it uses ``os.replace`` so the shared ``auth.json`` is
-never left half-written.
-
-Credentials are protected by OS-level file permissions (Windows ACLs / Unix 0600)
-but are not encrypted at rest — the same approach used by the Codex CLI itself.
-See SECURITY.md for the full threat model.
+Only the official Codex process receives a temporary plaintext profile file.
+Its latest rotated token is sealed after it exits. The shared Codex home remains
+in the official client's file format; it is not an application-owned vault.
 """
 
 from __future__ import annotations
@@ -18,11 +10,87 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from codex_account_manager.core.files import atomic_write
+from codex_account_manager.core import protection
+from codex_account_manager.core.files import atomic_write, restrict_access
+from codex_account_manager.core.operation_lock import OperationLock
 from codex_account_manager.core.paths import paths
 
 _AUTH_FILE = "auth.json"
 _FILE_AUTH_SETTING = 'cli_auth_credentials_store = "file"'
+_VAULT_FILE = "auth.dpapi"
+_PURPOSE = b"QuotaCrew.profile-auth.v1"
+
+
+def managed_home(home: str | Path) -> bool:
+    path = Path(home)
+    return not path.is_symlink() and path.resolve().parent == paths.profiles_dir.resolve()
+
+
+def _checked_file(path: Path) -> Path:
+    if path.is_symlink() or path.resolve().parent != path.parent.resolve():
+        raise protection.CredentialProtectionError("Refusing a redirected sign-in file.")
+    return path
+
+
+def _seal(home: Path) -> None:
+    plain = _checked_file(home / _AUTH_FILE)
+    vault = _checked_file(home / _VAULT_FILE)
+    if plain.is_file():
+        restrict_access(plain)
+        encrypted = protection.protect(plain.read_bytes(), _PURPOSE)
+        atomic_write(vault, encrypted)
+        # Never delete the only usable copy before a verified durable write.
+        protection.unprotect(vault.read_bytes(), _PURPOSE)
+        plain.unlink()
+
+
+class ProfileAuthSession:
+    """Hold the per-profile lock until the owning CLI process has fully stopped."""
+
+    def __init__(self, home: str | Path, *, signing_in: bool = False):
+        self.home = Path(home)
+        self.lock: OperationLock | None = None
+        self.enabled = protection.available() and managed_home(home)
+        self.signing_in = signing_in
+        self.materialized = False
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        lock = OperationLock(self.home / "auth-session.lock")
+        lock.__enter__()
+        self.lock = lock
+        try:
+            # A previous abrupt process exit may have left a newer CLI token.
+            _seal(self.home)
+            vault = _checked_file(self.home / _VAULT_FILE)
+            if vault.exists() and not self.signing_in:
+                atomic_write(
+                    self.home / _AUTH_FILE, protection.unprotect(vault.read_bytes(), _PURPOSE)
+                )
+                self.materialized = True
+            return self
+        except BaseException:
+            self.lock.__exit__(None, None, None)
+            self.lock = None
+            raise
+
+    def __exit__(self, *_exc):
+        if self.lock is None:
+            return
+        try:
+            if (self.home / _AUTH_FILE).exists():
+                _seal(self.home)
+            elif self.materialized:
+                # Codex deleted its credential (e.g. logout). Do not resurrect it.
+                _checked_file(self.home / _VAULT_FILE).unlink(missing_ok=True)
+        except OSError:
+            raise protection.CredentialProtectionError(
+                "Windows could not finish protecting the sign-in data. Close other account operations and retry."
+            ) from None
+        finally:
+            self.lock.__exit__(None, None, None)
+            self.lock = None
 
 
 class FileCredentialStore:
@@ -32,7 +100,45 @@ class FileCredentialStore:
         self.shared_home = Path(shared_home) if shared_home else paths.shared_codex_home
 
     def profile_auth_path(self, codex_home: str | Path) -> Path:
-        return Path(codex_home) / _AUTH_FILE
+        vault = Path(codex_home) / _VAULT_FILE
+        return vault if vault.exists() else Path(codex_home) / _AUTH_FILE
+
+    def profile_session(
+        self, codex_home: str | Path, *, signing_in: bool = False
+    ) -> ProfileAuthSession:
+        if not managed_home(codex_home):
+            raise protection.CredentialProtectionError(
+                "Profile is outside managed account storage."
+            )
+        return ProfileAuthSession(codex_home, signing_in=signing_in)
+
+    def read_profile(self, codex_home: str | Path) -> bytes:
+        if not managed_home(codex_home):
+            raise protection.CredentialProtectionError(
+                "Profile is outside managed account storage."
+            )
+        home = Path(codex_home)
+        with OperationLock(home / "auth-session.lock"):
+            if protection.available():
+                _seal(home)
+                return protection.unprotect(
+                    _checked_file(home / _VAULT_FILE).read_bytes(), _PURPOSE
+                )
+            return _checked_file(home / _AUTH_FILE).read_bytes()
+
+    def protect_profiles(self) -> None:
+        """Migrate/reseal idle managed profiles after crash recovery, without logging data."""
+        if not protection.available() or not paths.profiles_dir.exists():
+            return
+        from codex_account_manager.core.errors import OperationBusyError
+
+        for home in paths.profiles_dir.iterdir():
+            if home.is_dir() and managed_home(home):
+                try:
+                    with OperationLock(home / "auth-session.lock"):
+                        _seal(home)
+                except OperationBusyError:
+                    continue
 
     @property
     def active_auth_path(self) -> Path:
@@ -55,7 +161,7 @@ class FileCredentialStore:
         if not source.exists():
             raise FileNotFoundError(f"Profile auth.json not found under {codex_home}")
         previous = self.read_active()
-        self.write_active_atomic(source.read_bytes())
+        self.write_active_atomic(self.read_profile(codex_home))
         return previous
 
     def restore_active(self, data: bytes | None) -> None:
@@ -69,8 +175,19 @@ class FileCredentialStore:
         active = self.read_active()
         if active is None:
             return
-        dest = self.profile_auth_path(codex_home)
-        atomic_write(dest, active)
+        if not managed_home(codex_home):
+            raise protection.CredentialProtectionError(
+                "Profile is outside managed account storage."
+            )
+        home = Path(codex_home)
+        with OperationLock(home / "auth-session.lock"):
+            if protection.available():
+                atomic_write(
+                    _checked_file(home / _VAULT_FILE), protection.protect(active, _PURPOSE)
+                )
+                _checked_file(home / _AUTH_FILE).unlink(missing_ok=True)
+            else:
+                atomic_write(_checked_file(home / _AUTH_FILE), active)
 
     def ensure_file_auth_config(self) -> None:
         """Make sure the shared home uses the file credential store."""

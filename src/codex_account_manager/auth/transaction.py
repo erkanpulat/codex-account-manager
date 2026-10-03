@@ -14,6 +14,7 @@ from pathlib import Path
 from codex_account_manager.adapters.credential_store import FileCredentialStore
 from codex_account_manager.adapters.desktop import WindowsDesktopLauncher
 from codex_account_manager.adapters.interfaces import DesktopLauncher
+from codex_account_manager.core import protection
 from codex_account_manager.core.errors import AccountMismatchError, TransactionError
 from codex_account_manager.core.events import bus
 from codex_account_manager.core.files import atomic_write
@@ -25,6 +26,7 @@ from codex_account_manager.domain.models import Profile
 from codex_account_manager.domain.states import TransactionStage
 
 log = get_logger(__name__)
+_RECOVERY_PURPOSE = b"QuotaCrew.switch-recovery.v1"
 
 
 @dataclass
@@ -79,13 +81,14 @@ class AuthTransaction:
         desktop: DesktopLauncher | None = None,
         verify_account=None,
         wait_ready_timeout: float = 40.0,
-        launch_desktop: bool = True,
+        launch_desktop: bool | None = None,
     ):
         self.credentials = credential_store or FileCredentialStore()
         self.desktop = desktop if desktop is not None else _default_desktop()
         self._verify_account = verify_account
         self.wait_ready_timeout = wait_ready_timeout
-        self.launch_desktop = launch_desktop
+        self._launch_requested = launch_desktop
+        self.launch_desktop = launch_desktop is not False
 
     @property
     def recovery_path(self) -> Path:
@@ -102,10 +105,26 @@ class AuthTransaction:
             payload[name] = (
                 base64.b64encode(source.read_bytes()).decode() if source.exists() else None
             )
-        atomic_write(self.recovery_path, json.dumps(payload).encode())
+        self._write_recovery(payload)
+
+    def _write_recovery(self, payload: dict) -> None:
+        atomic_write(
+            self.recovery_path, protection.protect(json.dumps(payload).encode(), _RECOVERY_PURPOSE)
+        )
+
+    def _read_recovery(self) -> dict:
+        raw = self.recovery_path.read_bytes()
+        if raw.startswith(protection.MAGIC):
+            return json.loads(protection.unprotect(raw, _RECOVERY_PURPOSE))
+        # Retain compatibility with pre-encryption snapshots. Encrypt before any
+        # fallible restore operation so another interrupted recovery stays safe.
+        payload = json.loads(raw)
+        if protection.available():
+            self._write_recovery(payload)
+        return payload
 
     def _arm_recovery(self) -> None:
-        payload = json.loads(self.recovery_path.read_bytes())
+        payload = self._read_recovery()
         # Desktop may rotate credentials while shutting down. Roll back to its final state.
         for name in ("auth.json", "config.toml"):
             source = self.credentials.shared_home / name
@@ -113,10 +132,10 @@ class AuthTransaction:
                 base64.b64encode(source.read_bytes()).decode() if source.exists() else None
             )
         payload["credentials_may_have_changed"] = True
-        atomic_write(self.recovery_path, json.dumps(payload).encode())
+        self._write_recovery(payload)
 
     def _restore(self) -> None:
-        payload = json.loads(self.recovery_path.read_bytes())
+        payload = self._read_recovery()
         if payload.get("home") != str(self.credentials.shared_home.resolve()):
             raise TransactionError(
                 "Recovery snapshot belongs to a different Codex home.", stage="rollback"
@@ -152,9 +171,11 @@ class AuthTransaction:
         """Restore an interrupted switch before starting the GUI or another switch."""
         with OperationLock(paths.data_dir / "account-operation.lock"):
             if not self.recovery_path.exists():
+                self.credentials.protect_profiles()
                 return False
             self._restore()
             (paths.data_dir / "switch.journal.json").unlink(missing_ok=True)
+            self.credentials.protect_profiles()
             return True
 
     async def switch(
@@ -187,6 +208,17 @@ class AuthTransaction:
             raise TransactionError(
                 f"Profile '{target.alias}' has no auth.json to activate.", stage="prepare"
             )
+        if isinstance(self.desktop, WindowsDesktopLauncher):
+            if self._launch_requested is None:
+                from codex_account_manager.platform.windows import is_desktop_installed
+
+                # Desktop is an optional surface. CLI and IDE account activation
+                # must work without installing or attempting to launch it.
+                self.launch_desktop = await asyncio.to_thread(is_desktop_installed)
+        if self.launch_desktop and isinstance(self.desktop, WindowsDesktopLauncher):
+            # Resolve the dependency before checking/rotating credentials, writing
+            # a recovery snapshot, or stopping any application.
+            await asyncio.to_thread(self.desktop.require_available)
         if self._verify_account is None:
             from codex_account_manager.accounts.service import AccountService
 
@@ -199,7 +231,7 @@ class AuthTransaction:
             account_id = await self._verify(Path(target.codex_home))
             if account_id != target.bound_account_id:
                 raise AccountMismatchError("Profile credentials no longer match its bound account.")
-        new_auth = source.read_bytes()
+        new_auth = self.credentials.read_profile(target.codex_home)
         if not new_auth:
             raise TransactionError("Profile credentials are empty.", stage="prepare")
         if before_desktop_stop is not None:
@@ -220,8 +252,9 @@ class AuthTransaction:
             stage(TransactionStage.BACKUP_ACTIVE_AUTH)
             self._snapshot()
             snapshot_written = True
-            stage(TransactionStage.STOP_DESKTOP)
-            self.desktop.stop()
+            if self.launch_desktop or self.desktop.is_running():
+                stage(TransactionStage.STOP_DESKTOP)
+                self.desktop.stop()
             self._arm_recovery()
             self.credentials.ensure_file_auth_config()
             stage(TransactionStage.ATOMIC_REPLACE)

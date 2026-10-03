@@ -10,11 +10,145 @@ import pytest
 from codex_account_manager.adapters import desktop
 from codex_account_manager.platform import windows
 from codex_account_manager.platform.windows import _process_has_exited
+from codex_account_manager.platform.windows import is_desktop_installed as native_desktop_installed
 
 
 @pytest.fixture(autouse=True)
 def assume_processes_are_alive(monkeypatch):
     monkeypatch.setattr(windows, "_process_has_exited", lambda _pid: False)
+    monkeypatch.setattr(windows, "is_desktop_installed", lambda: True)
+
+
+@pytest.mark.parametrize(
+    "count,code,expected", [(0, 0, False), (1, 122, True), (2, 122, True), (0, 5, None)]
+)
+def test_desktop_registration_checks_current_user_without_launching(
+    count, code, expected, monkeypatch
+):
+    from unittest.mock import Mock
+
+    monkeypatch.setattr(windows, "sys", SimpleNamespace(platform="win32"))
+
+    def query(family, count_pointer, names, _length_pointer, buffer):
+        assert family == "OpenAI.Codex_2p2nqsd0c76g0"
+        assert names is None and buffer is None
+        count_pointer._obj.value = count
+        return code
+
+    function = Mock(side_effect=query)
+    monkeypatch.setattr(
+        windows.ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(GetPackagesByPackageFamily=function),
+        raising=False,
+    )
+    launch = Mock()
+    monkeypatch.setattr(windows.subprocess, "Popen", launch)
+    if expected is None:
+        with pytest.raises(OSError, match="could not be checked"):
+            native_desktop_installed()
+    else:
+        assert native_desktop_installed() is expected
+    launch.assert_not_called()
+
+
+async def test_missing_desktop_stops_switch_before_credentials_or_recovery_change(
+    tmp_paths, monkeypatch
+):
+    from unittest.mock import AsyncMock, Mock
+
+    from codex_account_manager.adapters.credential_store import FileCredentialStore
+    from codex_account_manager.auth.transaction import AuthTransaction
+    from codex_account_manager.core.errors import DesktopLaunchError
+    from codex_account_manager.domain.models import Profile
+
+    monkeypatch.setattr(windows, "is_desktop_installed", lambda: False)
+    store = FileCredentialStore(shared_home=tmp_paths.shared_codex_home)
+    store.write_active_atomic(b"original-shared-auth")
+    home = tmp_paths.profiles_dir / "target"
+    home.mkdir(parents=True)
+    (home / "auth.json").write_bytes(b"target-auth")
+    config = store.shared_home / "config.toml"
+    config.write_bytes(b"original-config")
+    target = Profile(
+        id="target", alias="Second", codex_home=str(home), bound_account_id="account-2"
+    )
+    verify, stop, launch = AsyncMock(), Mock(), Mock()
+    monkeypatch.setattr(windows, "stop_desktop", stop)
+    monkeypatch.setattr(windows, "launch_desktop", launch)
+    tx = AuthTransaction(
+        credential_store=store,
+        desktop=desktop.WindowsDesktopLauncher(),
+        verify_account=verify,
+        launch_desktop=True,
+    )
+    with pytest.raises(DesktopLaunchError, match="not installed"):
+        await tx.switch(target)
+    assert store.read_active() == b"original-shared-auth"
+    assert config.read_bytes() == b"original-config"
+    assert (home / "auth.json").read_bytes() == b"target-auth"
+    assert not tx.recovery_path.exists()
+    assert not (tmp_paths.data_dir / "switch.journal.json").exists()
+    verify.assert_not_awaited()
+    stop.assert_not_called()
+    launch.assert_not_called()
+
+
+def test_launch_missing_desktop_never_opens_an_unrelated_explorer_window(monkeypatch):
+    from unittest.mock import Mock
+
+    from codex_account_manager.core.errors import DesktopLaunchError
+
+    monkeypatch.setattr(windows, "is_desktop_installed", lambda: False)
+    launch = Mock()
+    monkeypatch.setattr(windows.subprocess, "Popen", launch)
+    with pytest.raises(DesktopLaunchError, match="not installed"):
+        windows.launch_desktop()
+    launch.assert_not_called()
+
+
+@pytest.mark.parametrize("verify_matches", [True, False])
+async def test_cli_and_ide_activation_without_desktop_stays_transactional(
+    tmp_paths, monkeypatch, verify_matches
+):
+    from unittest.mock import Mock
+
+    from codex_account_manager.adapters.credential_store import FileCredentialStore
+    from codex_account_manager.auth.transaction import AuthTransaction
+    from codex_account_manager.core.errors import TransactionError
+    from codex_account_manager.domain.models import Profile
+
+    monkeypatch.setattr(windows, "is_desktop_installed", lambda: False)
+    monkeypatch.setattr(windows, "is_desktop_running", lambda: False)
+    launch, stop = Mock(), Mock()
+    monkeypatch.setattr(windows, "launch_desktop", launch)
+    monkeypatch.setattr(windows, "stop_desktop", stop)
+    store = FileCredentialStore(shared_home=tmp_paths.shared_codex_home)
+    store.write_active_atomic(b"original")
+    home = tmp_paths.profiles_dir / "target"
+    home.mkdir(parents=True)
+    (home / "auth.json").write_bytes(b"target")
+    target = Profile(
+        id="target", alias="IDE account", codex_home=str(home), bound_account_id="acc2"
+    )
+
+    async def verify(_home):
+        return "acc2" if verify_matches else "wrong"
+
+    tx = AuthTransaction(
+        credential_store=store, desktop=desktop.WindowsDesktopLauncher(), verify_account=verify
+    )
+    if verify_matches:
+        assert (await tx.switch(target)).success
+        assert store.read_active() == b"target"
+        stop.assert_not_called()
+    else:
+        with pytest.raises(TransactionError) as error:
+            await tx.switch(target)
+        assert error.value.rolled_back
+        assert store.read_active() == b"original"
+    launch.assert_not_called()
+    assert not tx.recovery_path.exists()
 
 
 class Process:
@@ -99,6 +233,7 @@ async def test_switch_commits_when_verified_account_and_packaged_process_are_rea
         running = True
 
     monkeypatch.setattr(windows, "stop_desktop", stop)
+    monkeypatch.setattr(windows, "is_desktop_installed", lambda: True)
     monkeypatch.setattr(windows, "launch_desktop", launch)
     monkeypatch.setattr(windows, "is_desktop_running", lambda: running)
 

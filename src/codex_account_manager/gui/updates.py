@@ -14,6 +14,7 @@ from codex_account_manager import __version__, updates
 from codex_account_manager.gui.i18n import tr
 from codex_account_manager.gui.view_base import setting_row
 from codex_account_manager.gui.widgets import ToggleSwitch, label
+from codex_account_manager.platform import package
 from codex_account_manager.storage.repositories import SettingsRepository
 
 
@@ -24,6 +25,7 @@ class UpdatesPanel(QWidget):
     def __init__(self, runner, can_restart):
         super().__init__()
         self.runner = runner
+        self._packaged = package.is_packaged()
         self.can_restart = can_restart
         self.release: updates.Release | None = None
         self.installer: Path | None = None
@@ -42,7 +44,9 @@ class UpdatesPanel(QWidget):
             layout,
             tr("Check for updates automatically"),
             tr(
-                "Check GitHub once a day. Download and installation start only when you choose Update."
+                "Updates for this installation are managed by Microsoft Store."
+                if self._packaged
+                else "Check GitHub once a day. Download and installation start only when you choose Update."
             ),
             self.automatic,
         )
@@ -77,6 +81,12 @@ class UpdatesPanel(QWidget):
         )
         detail.setWordWrap(True)
         layout.addWidget(detail)
+        if self._packaged:
+            self.automatic.setChecked(False)
+            self.automatic.setEnabled(False)
+            self.check.setText(tr("Open Microsoft Store"))
+            self.status.setText(tr("Updates for this installation are managed by Microsoft Store."))
+            detail.setText(tr("Manage automatic updates in Microsoft Store settings."))
         layout.addStretch()
         self.timer = QTimer(self)
         self.timer.setInterval(60 * 60 * 1000)
@@ -85,9 +95,13 @@ class UpdatesPanel(QWidget):
 
     def _loaded(self, values):
         with QSignalBlocker(self.automatic):
-            self.automatic.setChecked(values.get("check_updates", "true") == "true")
+            self.automatic.setChecked(
+                not self._packaged and values.get("check_updates", "true") == "true"
+            )
 
     def start(self):
+        if self._packaged:
+            return
         self.runner.submit(asyncio.to_thread(updates.cleanup_downloads))
         if updates.installed_directory() is not None:
             self.timer.start()
@@ -97,6 +111,8 @@ class UpdatesPanel(QWidget):
         self.timer.stop()
 
     def _save_preference(self, enabled):
+        if self._packaged:
+            return
         self.runner.submit(SettingsRepository().set("check_updates", str(enabled).lower()))
 
     def _scheduled_check(self):
@@ -120,6 +136,9 @@ class UpdatesPanel(QWidget):
         self.install.setEnabled(not busy)
 
     def check_now(self):
+        if self._packaged:
+            QDesktopServices.openUrl(QUrl(package.STORE_UPDATES_URI))
+            return
         if self._busy:
             return
         self._working(True)
@@ -146,6 +165,9 @@ class UpdatesPanel(QWidget):
         QDesktopServices.openUrl(QUrl(self.release.url if self.release else updates.RELEASES_URL))
 
     def _update(self):
+        if self._packaged:
+            self.check_now()
+            return
         if self._busy or self.release is None:
             return
         if updates.installed_directory() is None:

@@ -369,6 +369,9 @@ class ContinuityService:
         if thread_id:
             await self.goals.mark_status(thread_id, GoalState.SWITCHING)
 
+        # Account activation refreshes an installed Desktop independently of
+        # whether its automatic continuation is enabled. Surface preferences
+        # control subsequent work, not credential verification or recovery.
         tx = transaction or AuthTransaction()
         try:
             result = await tx.switch(target, before_desktop_stop=before_desktop_stop)

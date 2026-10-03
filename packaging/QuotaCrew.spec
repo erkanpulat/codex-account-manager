@@ -17,8 +17,17 @@ if sys.platform == "win32":
 
 _root = Path(SPECPATH).parent
 _version = tomllib.loads((_root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-_notices = runpy.run_path(str(_root / "scripts/bundle_licenses.py"))["collect_notices"](_root)
+_store_build = os.environ.get("QUOTACREW_STORE_BUILD") == "1"
+_notices = runpy.run_path(str(_root / "scripts/bundle_licenses.py"))["collect_notices"](
+    _root, extras=("gui", "store") if _store_build else ("gui",),
+)
 _hidden = collect_submodules("codex_account_manager")
+if _store_build:
+    from winrt.windows.applicationmodel import StartupTask
+    _hidden += collect_submodules("winrt")
+_datas = [(str(_notices), "licenses"), (str(_root / "THIRD_PARTY_NOTICES.md"), "licenses"), (str(_root / "LICENSE"), "licenses"), (str(_root / "PRIVACY.html"), "privacy")]
+if _store_build:
+    _datas.append((str(_root / "packaging/store/runtime.json"), "store"))
 
 def executable_version(name):
     numbers = tuple(int(part) for part in _version.split(".")) + (0,)
@@ -41,9 +50,9 @@ _common = dict(
     pathex=["src"],
     hiddenimports=_hidden,
     hookspath=[str(_root / "packaging/hooks")],
-    datas=[(str(_notices), "licenses"), (str(_root / "THIRD_PARTY_NOTICES.md"), "licenses"), (str(_root / "LICENSE"), "licenses")],
+    datas=_datas,
     runtime_hooks=[],
-    excludes=["tkinter", "mypy", "pydantic.mypy", "pytest", "ruff"],
+    excludes=["tkinter", "mypy", "pydantic.mypy", "pytest", "ruff"] + ([] if _store_build else ["winrt"]),
     noarchive=False,
 )
 

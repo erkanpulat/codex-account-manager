@@ -86,7 +86,27 @@ async def run_diagnostics() -> list[CheckResult]:
         results.append(CheckResult("profiles", False, f"error: {exc}"))
 
     if sys.platform == "win32":
+        import asyncio
+
         from codex_account_manager.platform import windows
+
+        try:
+            installed = await asyncio.to_thread(windows.is_desktop_installed)
+            results.append(
+                CheckResult(
+                    "desktop_installed",
+                    installed,
+                    "Desktop is installed." if installed else windows.DESKTOP_MISSING_MESSAGE,
+                )
+            )
+        except OSError:
+            results.append(
+                CheckResult(
+                    "desktop_installed",
+                    False,
+                    "Codex Desktop installation could not be checked. Retry in Settings.",
+                )
+            )
 
         results.append(
             CheckResult(

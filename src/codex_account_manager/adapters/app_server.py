@@ -11,8 +11,14 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from codex_account_manager import __version__
+from codex_account_manager.adapters.credential_store import ProfileAuthSession
 from codex_account_manager.adapters.interfaces import CapabilitySet, GoalInfo, ServerInfo
 from codex_account_manager.codex.runtime import codex_command, profile_environment
+from codex_account_manager.core.child_process import (
+    ChildProcessLifetime,
+    finish_cleanup,
+    stop_owned_process,
+)
 from codex_account_manager.core.errors import (
     AppServerError,
     DesktopContinuationRequired,
@@ -20,6 +26,7 @@ from codex_account_manager.core.errors import (
     SignInRequiredError,
 )
 from codex_account_manager.core.logging import get_logger
+from codex_account_manager.core.protection import CredentialProtectionError
 from codex_account_manager.core.redaction import redact_text
 from codex_account_manager.domain.models import AccountSnapshot, ThreadInfo
 
@@ -53,6 +60,8 @@ class CodexAppServer:
         self._request_id = 0
         self._capabilities: CapabilitySet | None = None
         self._closing = False
+        self._auth_session: ProfileAuthSession | None = None
+        self._child_lifetime = ChildProcessLifetime()
 
     async def start(self) -> ServerInfo:
         if self._proc is not None:
@@ -61,6 +70,8 @@ class CodexAppServer:
         creationflags = 0
         if sys.platform == "win32":
             creationflags = subprocess.CREATE_NO_WINDOW
+        self._auth_session = ProfileAuthSession(self.codex_home)
+        self._auth_session.__enter__()
         try:
             self._proc = await asyncio.create_subprocess_exec(
                 *codex_command("app-server", "--listen", "stdio://"),
@@ -71,10 +82,18 @@ class CodexAppServer:
                 env=profile_environment(self.codex_home),
                 creationflags=creationflags,
             )
-        except OSError as exc:
-            raise AppServerError(
-                f"Could not start Codex App Server: {redact_text(str(exc))}"
-            ) from exc
+            self._child_lifetime.attach(self._proc.pid)
+        except BaseException as exc:
+            if self._proc is not None:
+                await finish_cleanup(self._finish_process_close(self._proc))
+            else:
+                self._child_lifetime.close()
+                self._close_auth_session()
+            if isinstance(exc, OSError):
+                raise AppServerError(
+                    f"Could not start Codex App Server: {redact_text(str(exc))}"
+                ) from exc
+            raise
 
         self._reader_task = asyncio.create_task(self._read_loop())
 
@@ -106,6 +125,7 @@ class CodexAppServer:
         self._closing = True
         proc = self._proc
         if proc is None:
+            self._close_auth_session()
             return
 
         for fut in self._pending.values():
@@ -143,18 +163,31 @@ class CodexAppServer:
             else:
                 await asyncio.wait_for(proc.wait(), timeout=3)
         finally:
-            if proc.returncode is None:
-                try:
-                    proc.kill()
-                except ProcessLookupError:
-                    pass
+            await finish_cleanup(self._finish_process_close(proc))
+
+    async def _finish_process_close(self, proc) -> None:
+        try:
+            await stop_owned_process(proc, self._child_lifetime)
+        except Exception:
+            self._closing = False
+            raise CredentialProtectionError(
+                "Codex did not stop. Sign-in storage remains locked; restart QuotaCrew after Codex exits."
+            ) from None
+        finally:
             transport = getattr(proc, "_transport", None)
             if transport is not None:
                 try:
                     transport.close()
                 except Exception:
                     pass
-            self._proc = None
+        self._proc = None
+        self._close_auth_session()
+
+    def _close_auth_session(self) -> None:
+        session = self._auth_session
+        self._auth_session = None
+        if session is not None:
+            session.__exit__(None, None, None)
 
     async def __aenter__(self) -> CodexAppServer:
         await self.start()

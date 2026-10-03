@@ -10,7 +10,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 
-def collect_notices(root: Path) -> Path:
+def collect_notices(root: Path, extras: tuple[str, ...] = ("gui",)) -> Path:
     qt_version = version("PySide6")
     qt_notices = root / "packaging" / "licenses" / f"Qt-{qt_version}.txt"
     if not qt_notices.is_file():
@@ -28,10 +28,12 @@ def collect_notices(root: Path) -> Path:
         seen.add(name)
         dist = distribution(name)
         # Include runtime extras for the app, not development dependencies.
-        extra = "gui" if name == "codex-quotacrew" else ""
+        selected_extras = extras if name == "codex-quotacrew" else ("",)
         for raw in [] if name == "pyinstaller" else dist.requires or []:
             requirement = Requirement(raw)
-            if requirement.marker is None or requirement.marker.evaluate({"extra": extra}):
+            if requirement.marker is None or any(
+                requirement.marker.evaluate({"extra": extra}) for extra in selected_extras
+            ):
                 pending.append(requirement.name)
         if name == "codex-quotacrew":
             continue

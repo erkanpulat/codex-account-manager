@@ -46,7 +46,13 @@ def test_all_screens_and_theme_switches(window, app):
 
 
 @pytest.mark.parametrize(
-    "setting,scope", [("ide_continue", "ide"), ("auto_continue", None), ("monitoring", None)]
+    "setting,scope",
+    [
+        ("desktop_continue", "desktop"),
+        ("ide_continue", "ide"),
+        ("auto_continue", None),
+        ("monitoring", None),
+    ],
 )
 def test_continuation_stop_setting_preserves_its_scope(window, monkeypatch, setting, scope):
     from codex_account_manager.core.events import bus
@@ -240,6 +246,16 @@ def test_waiting_connection_notice_clears_after_confirmed_submission(window):
     assert window.notice.isHidden()
 
 
+def test_running_work_clears_its_previous_attention_notice(window):
+    from codex_account_manager.core.events import bus
+
+    bus.publish("continuation.status", thread_id="ide", state="needs_user", stage="ide")
+    assert not window.notice.isHidden()
+    bus.publish("continuation.status", thread_id="ide", state="running", stage="execution")
+    assert window.notice.isHidden()
+    assert not window._continuation_issues
+
+
 def test_successful_work_does_not_hide_another_conversations_failure(window):
     from codex_account_manager.core.events import bus
 
@@ -315,6 +331,8 @@ def test_account_creation_starts_login_and_blocks_duplicate_adds(window, monkeyp
 
 
 def test_continuation_badges_and_tray_follow_loaded_settings(window):
+    window.settings.desktop._checked(True)
+    window.settings.ide._checked("installed")
     window.settings._loaded(
         {"auto_continue": "true", "ide_continue": "true", "monitor_enabled": "true"}
     )
@@ -326,6 +344,27 @@ def test_continuation_badges_and_tray_follow_loaded_settings(window):
     window._monitoring_changed(False)
     assert "Paused" in window.ide_badge.text()
     assert window._running_work == 3
+    window.settings._loaded({"ide_continue": "false", "auto_continue": "false"})
+    assert not window.ide_badge.isHidden()
+    assert "Off" in window.ide_badge.text()
+    assert "Off" in window.tray_ide.text()
+    assert "Off" in window.tray_auto.text()
+
+
+def test_missing_desktop_explains_setup_and_preserves_off_preferences(window):
+    window.settings._loaded({"ide_continue": "true", "auto_continue": "true"})
+    window.settings.ide._checked("installed")
+    window.settings.desktop._checked(False)
+    assert "Needs setup" in window.desktop_badge.text()
+    assert "Enabled" in window.tray_ide.text()
+    assert window.settings.ide_continue.isChecked()
+    window.settings.ide._checked("missing_editor")
+    window.settings.desktop._checked(True)
+    assert "Enabled" in window.desktop_badge.text()
+    assert "Needs setup" in window.ide_badge.text()
+    window.settings._loaded({"ide_continue": "false", "auto_continue": "false"})
+    assert "Off" in window.tray_ide.text()
+    assert not window.ide_badge.isHidden()
 
 
 @pytest.mark.parametrize("page", [0, 1, 2, 3])
@@ -1375,6 +1414,29 @@ def test_stale_candidate_and_unknown_windows_are_not_presented_as_capacity(windo
     assert view._account_rows["Personal"]._primary_usage._value.text() == "—"
 
 
+def test_free_account_is_manual_only_and_never_badged_as_next_candidate(window):
+    from dataclasses import replace
+
+    from PySide6.QtWidgets import QLabel
+
+    profiles = sample_profiles()
+    profiles[1] = replace(
+        profiles[1], plan_type="free", primary_used_percent=None, secondary_used_percent=None
+    )
+    view = window.dashboard
+    view._render(profiles)
+    view.set_automation("availability_failover", True, 60)
+    free = view._account_rows["Studio"]
+    assert free._candidate.isHidden()
+    assert free._primary_usage._value.text() == "—"
+    assert any("manual switching only" in label.text() for label in free.findChildren(QLabel))
+    assert any(
+        action.isEnabled() and action.text() == "Switch account"
+        for action in free._switch_btn.menu().actions()
+    )
+    assert not view._account_rows["Open source"]._candidate.isHidden()
+
+
 def test_refresh_error_banner_clears_only_after_success(window):
     view = window.dashboard
     view._on_error(RuntimeError("offline"))
@@ -1839,6 +1901,123 @@ def test_shutdown_fields_only_show_relevant_inputs(window):
         widget.mode.setCurrentIndex(widget.mode.findData(mode))
         assert widget.time_fields.isHidden() == (mode != "timer")
         assert widget.work_fields.isHidden() == (mode != "work")
+
+
+def test_shutdown_cards_and_presets_review_without_starting(window):
+    from codex_account_manager.gui.i18n import tr
+
+    widget = window.power_view.controls
+    widget.mode_buttons.button(2).click()
+    assert widget.mode.currentData() == "timer"
+    for minutes in (30, 60, 120, 120):
+        widget.presets[minutes].click()
+        assert widget.countdown_minutes.value() == minutes
+        assert [value for value, button in widget.presets.items() if button.isChecked()] == [
+            minutes
+        ]
+    widget.countdown_minutes.setValue(147)
+    assert not any(button.isChecked() for button in widget.presets.values())
+    assert widget.summary_values["Target"].text() == tr(
+        "{hours} hr {minutes} min", hours=2, minutes=27
+    )
+    assert widget.plan.target is None
+    assert not widget.timer.isActive()
+    widget.mode_buttons.button(1).click()
+    assert widget.mode.currentData() == "limits"
+    assert widget.summary_values["Target"].text() == tr("All saved accounts")
+
+
+def test_shutdown_conversation_error_does_not_leak_into_timer_mode(window, monkeypatch):
+    from codex_account_manager.gui.i18n import tr
+
+    widget = window.power_view.controls
+    callbacks = []
+
+    def submit(coro, on_result=None, on_error=None):
+        coro.close()
+        callbacks.append(on_error)
+
+    monkeypatch.setattr(widget.runner, "submit", submit)
+    widget.mode_buttons.button(0).click()
+    assert widget.status.text() == tr("Loading conversations…")
+    widget.mode_buttons.button(2).click()
+    callbacks.pop()(RuntimeError("offline"))
+    assert widget.status.text() == tr("Shutdown is off.")
+    assert widget.schedule_button.isEnabled() == (os.name == "nt")
+    assert widget.plan.target is None
+
+
+def test_shutdown_summary_and_editing_follow_confirm_and_cancel(window, monkeypatch):
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QMessageBox
+
+    from codex_account_manager.gui import power
+    from codex_account_manager.gui.i18n import tr
+
+    monkeypatch.setattr(power, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(power.time, "monotonic", lambda: 100.0)
+    widget = window.power_view.controls
+    widget.mode_buttons.button(2).click()
+    widget.presets[30].click()
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.No)
+    widget.schedule_button.click()
+    assert widget.plan.target is None
+    assert widget.clock.isHidden()
+    monkeypatch.setattr(QMessageBox, "question", lambda *_args: QMessageBox.StandardButton.Yes)
+    widget.schedule_button.click()
+    assert widget.plan.target.mode == "timer"
+    assert widget.summary_values["Status"].text() == tr("Countdown active")
+    assert widget.clock.text() == "00:30:00"
+    assert not widget.clock.isHidden()
+    assert not any(button.isEnabled() for button in widget.mode_buttons.buttons())
+    assert not any(button.isEnabled() for button in widget.presets.values())
+    widget.cancel_button.click()
+    assert widget.plan.target is None
+    assert not widget.timer.isActive()
+    assert widget.clock.isHidden()
+    assert widget.summary_values["Status"].text() == tr("Not started")
+    assert all(button.isEnabled() for button in widget.mode_buttons.buttons())
+    assert all(button.isEnabled() for button in widget.presets.values())
+
+
+@pytest.mark.parametrize("locale", ["en", "tr"])
+@pytest.mark.parametrize("dark", [True, False])
+def test_shutdown_controls_are_reachable_in_small_window(app, locale, dark):
+    from PySide6.QtCore import QPoint
+
+    from codex_account_manager.gui.i18n import set_language
+
+    set_language(locale)
+    window = MainWindow(PreviewRunner())
+    try:
+        window._apply_theme(dark)
+        window.resize(1040, 700)
+        window.nav.setCurrentRow(window.stack.indexOf(window.power_view))
+        window.show()
+        app.processEvents()
+        area = window.power_view.scroll_area
+        widget = window.power_view.controls
+        for mode in range(3):
+            widget.mode_buttons.button(mode).click()
+            app.processEvents()
+            assert area.horizontalScrollBar().maximum() == 0
+            for control in (
+                widget.mode_buttons.button(mode),
+                widget.schedule_button,
+                widget.cancel_button,
+            ):
+                area.ensureWidgetVisible(control)
+                app.processEvents()
+                position = control.mapTo(area.viewport(), QPoint())
+                assert area.viewport().rect().contains(position)
+                assert area.viewport().rect().contains(position + control.rect().bottomRight())
+            assert widget.plan.target is None
+    finally:
+        window.dispose()
+        window.close()
+        app.processEvents()
+        set_language("en")
 
 
 def test_cancelled_work_preparation_cannot_arm_a_plan(window, monkeypatch):

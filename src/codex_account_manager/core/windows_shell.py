@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from codex_account_manager.platform import package
+
 APP_USER_MODEL_ID = "CodexAccountManager.Desktop"
 SHELL_LAUNCH_ARGUMENT = "--from-windows-shell"
 
@@ -34,6 +36,8 @@ def launch_from_explorer(executable: Path, arguments: list[str], *, visible: boo
 def delegate_gui_launch() -> bool:
     if sys.platform != "win32" or SHELL_LAUNCH_ARGUMENT in sys.argv:
         return False
+    if package.is_packaged():
+        return False
     executable = Path(sys.executable)
     arguments = [SHELL_LAUNCH_ARGUMENT]
     if not getattr(sys, "frozen", False):
@@ -44,10 +48,54 @@ def delegate_gui_launch() -> bool:
 
 
 def set_application_identity() -> None:
-    if sys.platform == "win32":
+    if sys.platform == "win32" and not package.is_packaged():
         from win32com.shell import shell
 
         shell.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+
+
+def create_desktop_shortcut(*, destination: Path | None = None) -> Path:
+    """Create a per-user link on a worker thread, using MSIX shell activation."""
+    if sys.platform != "win32":
+        raise OSError("Desktop shortcuts are supported on Windows only.")
+    import pythoncom
+    from win32com.shell import shell, shellcon
+
+    pythoncom.CoInitialize()
+    try:
+        identity = package.current_package()
+        directory = destination or Path(
+            shell.SHGetFolderPath(0, shellcon.CSIDL_DESKTOPDIRECTORY, None, 0)
+        )
+        path = directory / (
+            "QuotaCrew (Development).lnk"
+            if identity and ".Development_" in identity.family_name
+            else "QuotaCrew.lnk"
+        )
+        if path.exists():
+            raise FileExistsError("A QuotaCrew desktop shortcut already exists.")
+        directory.mkdir(parents=True, exist_ok=True)
+        if not getattr(sys, "frozen", False):
+            return create_shortcuts(Path(__file__).resolve().parents[3], destinations=(directory,))[
+                0
+            ]
+        shortcut = pythoncom.CoCreateInstance(
+            shell.CLSID_ShellLink, None, pythoncom.CLSCTX_INPROC_SERVER, shell.IID_IShellLink
+        )
+        if identity:
+            pidl, _attributes = shell.SHParseDisplayName(
+                f"shell:AppsFolder\\{identity.family_name}!App", 0, None
+            )
+            shortcut.SetIDList(pidl)
+        else:
+            shortcut.SetPath(sys.executable)
+            shortcut.SetWorkingDirectory(str(Path(sys.executable).parent))
+        shortcut.SetIconLocation(sys.executable, 0)
+        shortcut.SetDescription("QuotaCrew")
+        shortcut.QueryInterface(pythoncom.IID_IPersistFile).Save(str(path), 1)
+        return path
+    finally:
+        pythoncom.CoUninitialize()
 
 
 def create_shortcuts(

@@ -51,6 +51,11 @@ jobs:
           & "$(go env GOPATH)/bin/gitleaks.exe" git . --redact --no-banner --log-opts="--all"
           if ($LASTEXITCODE -ne 0) { throw 'Secret scan failed' }
       - run: python -m PyInstaller --clean --noconfirm packaging/QuotaCrew.spec
+      - name: Reject Store payload in GitHub release
+        shell: pwsh
+        run: |
+          if (Test-Path 'dist/QuotaCrew/_internal/store/runtime.json') { throw 'Store payload in GitHub GUI' }
+          if (Test-Path 'dist/cx/_internal/store/runtime.json') { throw 'Store payload in GitHub CLI' }
       - run: python scripts/verify_windows_package.py
       - run: python scripts/verify_windows_package.py --first-run
       - name: Build installer
@@ -58,7 +63,21 @@ jobs:
         run: |
           & "${env:ProgramFiles(x86)}/Inno Setup 6/ISCC.exe" packaging/installer.iss
           if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - name: Download previous stable installer for upgrade verification
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release download v0.2.1 --pattern 'QuotaCrew-Setup-0.2.1.exe' --pattern 'SHA256SUMS.txt' --dir build/previous-release
+          if ($LASTEXITCODE -ne 0) { throw 'Previous release download failed' }
+          $previous = 'build/previous-release/QuotaCrew-Setup-0.2.1.exe'
+          $digest = (Get-FileHash $previous -Algorithm SHA256).Hash.ToLowerInvariant()
+          $lines = Get-Content build/previous-release/SHA256SUMS.txt
+          if ($lines -notcontains "$digest  QuotaCrew-Setup-0.2.1.exe") { throw 'Previous installer checksum mismatch' }
       - run: python scripts/verify_windows_installer.py
+        env:
+          QUOTACREW_PREVIOUS_INSTALLER: build/previous-release/QuotaCrew-Setup-0.2.1.exe
       - name: Build portable archive
         shell: pwsh
         run: |

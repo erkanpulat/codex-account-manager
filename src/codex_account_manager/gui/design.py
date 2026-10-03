@@ -124,6 +124,12 @@ def make_icon(name: str, color: str, size: int = 20) -> QIcon:
         path.moveTo(m, s * 0.5)
         path.cubicTo(s * 0.35, m, s * 0.65, s - m, s - m, s * 0.5)
         p.drawPath(path)
+    elif name == "quota":
+        p.drawEllipse(QRectF(m, m, s - 2 * m, s * 0.24))
+        for y in (s * 0.38, s * 0.60):
+            p.drawArc(QRectF(m, y, s - 2 * m, s * 0.24), 180 * 16, 180 * 16)
+        p.drawLine(QLineF(m, s * 0.27, m, s * 0.72))
+        p.drawLine(QLineF(s - m, s * 0.27, s - m, s * 0.72))
     elif name == "accounts":
         p.drawEllipse(QRectF(s * 0.35, m, s * 0.3, s * 0.3))
         path = QPainterPath()

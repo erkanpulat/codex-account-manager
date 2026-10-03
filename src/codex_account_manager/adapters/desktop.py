@@ -12,6 +12,9 @@ log = get_logger(__name__)
 
 
 class WindowsDesktopLauncher:
+    def require_available(self) -> None:
+        windows.require_desktop_installed()
+
     def stop(self) -> None:
         windows.stop_desktop()
 

@@ -283,6 +283,8 @@ async def test_continue_on_limit_carries_active_conversation(
         fake.require_headless_compatible = desktop_only
         from unittest.mock import AsyncMock
 
+        fake.is_desktop_thread = AsyncMock(return_value=True)
+
         service.automation.native.latest_turn = AsyncMock(return_value=_limited_turn())
     launched = []
     service.automation.launch_batch = launched.extend
@@ -560,8 +562,9 @@ async def test_two_desktop_handoffs_keep_goal_and_follow_new_account(migrated_db
 
 
 @pytest.mark.parametrize("ide_failure", [None, "observation", "preparation", "running", "timeout"])
+@pytest.mark.parametrize("desktop_disabled", [False, True])
 async def test_two_desktop_and_one_ide_limit_continue_after_committed_switch(
-    migrated_db, monkeypatch, ide_failure
+    migrated_db, monkeypatch, ide_failure, desktop_disabled
 ):
     import asyncio
     from dataclasses import replace
@@ -576,6 +579,7 @@ async def test_two_desktop_and_one_ide_limit_continue_after_committed_switch(
     from tests.unit.test_native_ide import state_message
 
     await SettingsRepository().set("ide_continue", "true")
+    await SettingsRepository().set("desktop_continue", str(not desktop_disabled).lower())
     accounts = AccountService(app_server_factory=_factory("acc-2"))
     await _seed_two_profiles(migrated_db, accounts)
     store = FileCredentialStore(shared_home=migrated_db.shared_codex_home)
@@ -679,7 +683,8 @@ async def test_two_desktop_and_one_ide_limit_continue_after_committed_switch(
     result = await service.continue_on_limit("hesap2", transaction=transaction)
     assert result.success
     await asyncio.gather(*tuple(service.automation.tasks))
-    assert set(sends) == set(ids if ide_failure is None else ids[:2])
+    expected = ([] if desktop_disabled else ids[:2]) + (ids[2:] if ide_failure is None else [])
+    assert set(sends) == set(expected)
     observed = {work.thread_id: work for work in await service.tracker.visible()}
     assert all(observed[tid].turn_status == "inProgress" for tid in sends)
     if ide_failure is not None:

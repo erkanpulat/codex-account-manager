@@ -90,6 +90,28 @@ async def test_failover_continues_limited_conversation():
     assert continuity.continued == ["hesap2"]
 
 
+async def test_free_zero_usage_never_triggers_a_failover_or_fallback():
+    from dataclasses import replace
+
+    health = [
+        _health("limited", active=True, allowed=False, quota=QuotaState.LIMITED_WITH_RESET),
+        replace(_health("free-zero"), plan_type="free"),
+        _health("paid", secondary=65),
+    ]
+    continuity = _FakeContinuity()
+    watcher = Watcher(
+        accounts=_StubAccounts(health),
+        continuity=continuity,
+        policy=resolve_policy(SwitchPolicyKind.AVAILABILITY_FAILOVER),
+    )
+    await watcher.poll_once()
+    assert continuity.continued == ["paid"]
+    health.pop()
+    continuity.continued.clear()
+    await watcher.poll_once()
+    assert not continuity.continued
+
+
 async def test_recovery_error_does_not_suppress_independent_failover():
     from unittest.mock import AsyncMock
 

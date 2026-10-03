@@ -119,6 +119,9 @@ class ContinuationSupervisor:
     async def ide_enabled(self) -> bool:
         return await SettingsRepository().get("ide_continue", "false") == "true"
 
+    async def desktop_enabled(self) -> bool:
+        return await SettingsRepository().get("desktop_continue", "true") == "true"
+
     async def uses_ide(self, adapter: CodexAppServer, thread_id: str) -> bool:
         return await self.ide_enabled() and not await adapter.is_desktop_thread(thread_id)
 
@@ -179,8 +182,14 @@ class ContinuationSupervisor:
             except DesktopContinuationRequired:
                 desktop = True
             owner_id = None
+            ide_thread = desktop and not await adapter.is_desktop_thread(thread_id)
+            if desktop and not (
+                await self.ide_enabled() if ide_thread else await self.desktop_enabled()
+            ):
+                await self.report(thread_id, "skipped", "disabled")
+                return None
             turn: dict | None
-            if desktop and await self.uses_ide(adapter, thread_id):
+            if ide_thread:
                 turn, owner = await self.owner_turn(adapter, thread_id)
                 owner_id = owner.owner_id
                 if owner.blocked:
@@ -222,6 +231,13 @@ class ContinuationSupervisor:
                         if not await self.enabled():
                             break
                         if ticket.owner_id and not await self.ide_enabled():
+                            await self.report(ticket.thread_id, "skipped", "disabled")
+                            continue
+                        if (
+                            ticket.desktop
+                            and not ticket.owner_id
+                            and not await self.desktop_enabled()
+                        ):
                             await self.report(ticket.thread_id, "skipped", "disabled")
                             continue
                         if ticket.desktop:
@@ -303,7 +319,13 @@ class ContinuationSupervisor:
             ticket = ContinuationTicket(
                 row[0], row[1], row[2], row[3], desktop=bool(row[4]), owner_id=row[5]
             )
-            allowed = enabled and (not ticket.owner_id or await self.ide_enabled())
+            allowed = enabled and (
+                await self.ide_enabled()
+                if ticket.owner_id
+                else await self.desktop_enabled()
+                if ticket.desktop
+                else True
+            )
             if allowed and account_id is None and 0 <= time.time() - row[6] < 600:
                 continue
             if (
@@ -358,7 +380,7 @@ class ContinuationSupervisor:
         task = asyncio.current_task()
 
         def stop_requested(event) -> None:
-            if task and event.payload.get("scope") != "ide":
+            if task and event.payload.get("scope") not in {"ide", "desktop"}:
                 loop.call_soon_threadsafe(task.cancel)
 
         unsubscribe = bus.subscribe("continuation.stop", stop_requested)
@@ -504,10 +526,17 @@ class ContinuationSupervisor:
                     raise AppServerError("The IDE conversation owner changed.")
                 verified_owner = owner_snapshot.owner_id
                 return turn
+            if not await self.desktop_enabled():
+                raise AppServerError("Desktop continuation is disabled.")
             return await verified_desktop_turn(self.native, adapter, ticket.thread_id, wait=wait)
 
         def stop_requested(event) -> None:
-            if task and (event.payload.get("scope") != "ide" or ticket.owner_id):
+            scope = event.payload.get("scope")
+            if task and (
+                scope not in {"ide", "desktop"}
+                or (scope == "ide" and ticket.owner_id)
+                or (scope == "desktop" and not ticket.owner_id)
+            ):
                 loop.call_soon_threadsafe(task.cancel)
 
         unsubscribe = bus.subscribe("continuation.stop", stop_requested)

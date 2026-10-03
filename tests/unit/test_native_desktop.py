@@ -321,7 +321,17 @@ async def test_stalled_post_send_observation_releases_lock_without_resending(
     from codex_account_manager.continuity import automation
     from codex_account_manager.core.operation_lock import OperationLock
 
-    monkeypatch.setattr(automation, "DESKTOP_OBSERVATION_SECONDS", 0.02)
+    observation_timeout = asyncio.timeout(None)
+    real_timeout = asyncio.timeout
+    monkeypatch.setattr(
+        automation.asyncio,
+        "timeout",
+        lambda seconds: (
+            observation_timeout
+            if seconds == automation.DESKTOP_OBSERVATION_SECONDS
+            else real_timeout(seconds)
+        ),
+    )
     supervisor, server, source, ticket = setup_native()
     cancelled = asyncio.Event()
     calls = 0
@@ -332,6 +342,7 @@ async def test_stalled_post_send_observation_releases_lock_without_resending(
         if calls <= 2:
             return source
         try:
+            observation_timeout.reschedule(asyncio.get_running_loop().time())
             await asyncio.Event().wait()
         finally:
             cancelled.set()

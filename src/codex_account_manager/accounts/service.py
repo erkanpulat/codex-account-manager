@@ -23,6 +23,11 @@ from codex_account_manager.adapters.app_server import CodexAppServer
 from codex_account_manager.adapters.credential_store import FileCredentialStore
 from codex_account_manager.adapters.interfaces import AppServerAdapter
 from codex_account_manager.codex.quota import evaluate_quota
+from codex_account_manager.core.child_process import (
+    ChildProcessLifetime,
+    finish_cleanup,
+    stop_owned_process,
+)
 from codex_account_manager.core.errors import (
     AccountMismatchError,
     AppServerError,
@@ -34,6 +39,7 @@ from codex_account_manager.core.files import restrict_access
 from codex_account_manager.core.logging import get_logger
 from codex_account_manager.core.operation_lock import OperationLock
 from codex_account_manager.core.paths import paths
+from codex_account_manager.core.protection import CredentialProtectionError
 from codex_account_manager.core.redaction import redact_text
 from codex_account_manager.domain.models import AccountSnapshot, Profile, ProfileHealth
 from codex_account_manager.domain.states import QuotaState
@@ -59,6 +65,8 @@ def _default_factory(codex_home: str) -> AppServerAdapter:
 async def _safe_aclose(adapter: AppServerAdapter) -> None:
     try:
         await adapter.aclose()
+    except CredentialProtectionError:
+        raise
     except Exception:
         pass
 
@@ -133,27 +141,29 @@ class AccountService:
         if sys.platform == "win32":
             creationflags = subprocess.CREATE_NEW_CONSOLE
         with OperationLock(paths.data_dir / "account-operation.lock"):
-            process = await asyncio.create_subprocess_exec(
-                *codex_command("login"),
-                env=profile_environment(profile.codex_home),
-                creationflags=creationflags,
-            )
-            try:
-                code = await asyncio.wait_for(process.wait(), timeout=600)
-            except TimeoutError:
-                raise ValueError(
-                    "Codex sign-in timed out after 10 minutes. Try signing in again."
-                ) from None
-            finally:
-                if process.returncode is None:
-                    process.kill()
-                    await process.wait()
+            with self.credentials.profile_session(profile.codex_home, signing_in=True):
+                process = await asyncio.create_subprocess_exec(
+                    *codex_command("login"),
+                    env=profile_environment(profile.codex_home),
+                    creationflags=creationflags,
+                )
+                lifetime = ChildProcessLifetime()
+                try:
+                    lifetime.attach(process.pid)
+                    code = await asyncio.wait_for(process.wait(), timeout=600)
+                except TimeoutError:
+                    raise ValueError(
+                        "Codex sign-in timed out after 10 minutes. Try signing in again."
+                    ) from None
+                finally:
+                    await finish_cleanup(stop_owned_process(process, lifetime))
+                if (Path(profile.codex_home) / "auth.json").exists():
+                    restrict_access(Path(profile.codex_home) / "auth.json")
             if code != 0:
                 log.warning("Codex sign-in exited with code %s", code)
                 raise ValueError(
                     "Codex sign-in failed. Check Codex in Settings > System check, then try again."
                 )
-            restrict_access(Path(profile.codex_home) / "auth.json")
             return await self._bind_current_account(alias)
 
     async def bind_current_account(self, alias: str) -> str:

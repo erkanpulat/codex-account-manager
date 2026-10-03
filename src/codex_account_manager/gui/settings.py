@@ -94,7 +94,9 @@ class SettingsView(BaseView):
         setting_row(
             general_layout,
             tr("Switch policy"),
-            tr("Switching restarts Codex Desktop."),
+            tr(
+                "Account switching works without Desktop. An installed Desktop app is restarted to reload its account."
+            ),
             self.policy,
         )
 
@@ -163,9 +165,21 @@ class SettingsView(BaseView):
             cont_layout,
             tr("Automatic continuation"),
             tr(
-                "Desktop conversations continue through the native Desktop connection. If verification fails, no message is sent."
+                "Master switch for automatic work. Desktop and IDE choices below are independent; missing applications do not disable other connections."
             ),
             self.auto_continue,
+        )
+
+        self.desktop_continue = ToggleSwitch(tr("Desktop continuation"))
+        self.desktop_continue.setChecked(True)
+        self.desktop_continue.toggled.connect(self._save_desktop_continue)
+        setting_row(
+            cont_layout,
+            tr("Desktop continuation"),
+            tr(
+                "Continue Desktop conversations only. Requires the Desktop app; VS Code does not require it."
+            ),
+            self.desktop_continue,
         )
 
         self.ide_continue = ToggleSwitch(tr("IDE continuation"))
@@ -214,6 +228,15 @@ class SettingsView(BaseView):
 
         self.cli = CliSetup(runner)
         general_layout.addWidget(self.cli)
+        from codex_account_manager.gui.desktop_setup import DesktopSetup, IDESetup
+
+        self.desktop = DesktopSetup(runner)
+        general_layout.addWidget(self.desktop)
+        self.ide = IDESetup(runner)
+        general_layout.addWidget(self.ide)
+        from codex_account_manager.gui.shortcuts import ShortcutPanel
+
+        general_layout.addWidget(ShortcutPanel(runner))
         self._load()
 
     def _load(self) -> None:
@@ -222,6 +245,12 @@ class SettingsView(BaseView):
         self.runner.submit(SettingsRepository().all(), self._loaded)
         self.policy.currentIndexChanged.connect(self._save_policy)
         self._refresh_startup()
+
+    def refresh(self) -> None:
+        # Recheck after the user installs a dependency or an app update. Saved
+        # choices remain untouched even if an optional application is absent.
+        self.desktop.refresh()
+        self.ide.refresh()
 
     def _loaded(self, values: dict[str, str]) -> None:
         with QSignalBlocker(self.policy):
@@ -236,6 +265,8 @@ class SettingsView(BaseView):
             self.auto_continue.setChecked(values.get("auto_continue", "true") == "true")
         with QSignalBlocker(self.ide_continue):
             self.ide_continue.setChecked(values.get("ide_continue", "false") == "true")
+        with QSignalBlocker(self.desktop_continue):
+            self.desktop_continue.setChecked(values.get("desktop_continue", "true") == "true")
         with QSignalBlocker(self.ide_refresh):
             self.ide_refresh.setChecked(values.get("ide_refresh", "false") == "true")
         with QSignalBlocker(self.monitoring):
@@ -274,6 +305,19 @@ class SettingsView(BaseView):
             self._monitor_saved()
 
         self.runner.submit(SettingsRepository().set("ide_continue", str(enabled).lower()), saved)
+
+    def _save_desktop_continue(self, enabled: bool) -> None:
+        from codex_account_manager.core.events import bus
+
+        def saved(_result):
+            if not enabled:
+                bus.publish("continuation.stop", scope="desktop")
+            self.continuation_changed.emit()
+            self._monitor_saved()
+
+        self.runner.submit(
+            SettingsRepository().set("desktop_continue", str(enabled).lower()), saved
+        )
 
     def _save_background(self, enabled: bool) -> None:
         from codex_account_manager.storage.repositories import SettingsRepository

@@ -105,7 +105,7 @@ Gerçek kota kesintisinde deneyin; kota harcamak için gereksiz iş üretmeyin. 
 
 ## IDE: VS Code, Cursor, Windsurf
 
-Kullandığınız her editörde ayrı deneyin. IDE devamı varsayılan kapalı ve deneysel. WSL, remote SSH ve bulut ortamları bu yerel Windows yolunun doğrulanmış kapsamı değildir.
+Kullandığınız her editörde ayrı deneyin. Yeni 0.2.2 kurulumunda IDE devamı ve VS Code yenileme varsayılan açık ve deneysel; eski kullanıcı tercihleri korunur. WSL, remote SSH ve bulut ortamları bu yerel Windows yolunun doğrulanmış kapsamı değildir.
 
 1. Yerel test projesini açın; eklentide A hesabını doğrulayın. B kullanılabilir olsun.
 2. IDE devamı kapalıyken iş çalıştırın: tercih üst çubuk/tepside kapalı görünmeli; otomatik devam girdisi gitmemeli.

@@ -157,7 +157,7 @@ To offer users an update, publish a higher-version stable GitHub Release with it
 
 Account profiles, settings and tracking records stay on your computer. Existing conversations remain in the shared `~/.codex` home; installation, updates and uninstalling QuotaCrew preserve that history. **System check** shows the data locations.
 
-QuotaCrew has no telemetry or credential proxy. Codex connects to OpenAI for sign-in and account information. Credential files use restricted access permissions; they are not encrypted. Diagnostic exports exclude credentials, databases and conversation text. Email addresses can be hidden in the interface. [Security and data protection](SECURITY.md).
+QuotaCrew has no telemetry or credential proxy. Codex connects to OpenAI for sign-in and account information. On Windows, saved profile credentials and account-switch recovery data are encrypted with user-scoped DPAPI. A profile is temporarily decrypted while its Codex process runs; interrupted sessions are protected again on recovery. The shared Codex credential file and local SQLite metadata remain unencrypted with restricted access permissions. Diagnostic exports exclude credentials, databases and conversation text. Email addresses can be hidden in the interface. [Security and data protection](SECURITY.md).
 
 ## Development and contributions
 

@@ -92,8 +92,8 @@ async def test_login_subprocess_lifecycle(migrated_db, monkeypatch, outcome):
         wait_for = asyncio.wait_for
 
         async def short_timeout(awaitable, timeout):
-            assert timeout == 600
-            return await wait_for(awaitable, timeout=0.05)
+            assert timeout in {600, 3}
+            return await wait_for(awaitable, timeout=0.05 if timeout == 600 else timeout)
 
         monkeypatch.setattr(asyncio, "wait_for", short_timeout)
 

@@ -125,7 +125,7 @@ def test_legacy_recovery_snapshot_still_restores_credentials(tmp_paths):
     desktop = FakeDesktop()
     tx = AuthTransaction(credential_store=store, desktop=desktop)
     tx._snapshot()
-    payload = json.loads(tx.recovery_path.read_bytes())
+    payload = tx._read_recovery()
     del payload["credentials_may_have_changed"]
     tx.recovery_path.write_text(json.dumps(payload), encoding="utf-8")
     store.write_active_atomic(b"interrupted switch")
@@ -168,4 +168,4 @@ async def test_verified_target_retains_rotated_credentials_for_next_switch(tmp_p
         credential_store=store, desktop=FakeDesktop(), verify_account=rotating_verify
     )
     assert (await tx.switch(profile)).success
-    assert store.profile_auth_path(profile.codex_home).read_bytes() == b"verified-new-generation"
+    assert store.read_profile(profile.codex_home) == b"verified-new-generation"

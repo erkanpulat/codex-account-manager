@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+from codex_account_manager.platform import package
+
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _VALUE_NAME = "CodexAccountManager"
 
@@ -11,6 +13,8 @@ _VALUE_NAME = "CodexAccountManager"
 def enable_start_with_windows(command: str) -> bool:
     if sys.platform != "win32":
         return False
+    if package.is_packaged():
+        return _packaged_startup(True)
     import winreg
 
     try:
@@ -24,6 +28,8 @@ def enable_start_with_windows(command: str) -> bool:
 def disable_start_with_windows() -> bool:
     if sys.platform != "win32":
         return False
+    if package.is_packaged():
+        return _packaged_startup(False)
     import winreg
 
     try:
@@ -39,6 +45,8 @@ def disable_start_with_windows() -> bool:
 def is_start_with_windows_enabled() -> bool:
     if sys.platform != "win32":
         return False
+    if package.is_packaged():
+        return _packaged_startup(None)
     import winreg
 
     try:
@@ -46,4 +54,11 @@ def is_start_with_windows_enabled() -> bool:
             value, _ = winreg.QueryValueEx(key, _VALUE_NAME)
         return bool(value)
     except OSError:
+        return False
+
+
+def _packaged_startup(enabled: bool | None) -> bool:
+    try:
+        return package.startup_action(enabled)
+    except (ImportError, OSError, RuntimeError):
         return False

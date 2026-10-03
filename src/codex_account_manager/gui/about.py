@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from codex_account_manager.core.privacy import policy_path
 from codex_account_manager.gui.design import DARK
 from codex_account_manager.gui.i18n import (
     tr,
@@ -58,6 +59,11 @@ class AboutView(BaseView):
             )
             buttons.addWidget(button, 1 + index // 2, index % 2)
         layout.addWidget(support)
+        privacy = QPushButton(tr("Privacy policy"))
+        privacy.clicked.connect(
+            lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(policy_path())))
+        )
+        layout.addWidget(privacy)
         for title, description in (
             (
                 tr("What does it do?"),
@@ -80,7 +86,7 @@ class AboutView(BaseView):
             (
                 tr("What happens during a switch?"),
                 tr(
-                    "The target account is checked, the current login is saved for recovery, and Codex Desktop restarts. Conversation files stay in the shared Codex folder. Save your work first. If a switch fails, the application attempts to restore the previous login; any recovery failure is reported."
+                    "The target account is verified and the current login is saved for recovery. Desktop restarts if installed; CLI and IDE switching work without it. Conversation files stay in the shared Codex folder. Save your work first. Failed switches attempt to restore the previous login; recovery failures are reported."
                 ),
             ),
             (

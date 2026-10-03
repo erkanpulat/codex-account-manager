@@ -14,11 +14,13 @@ Encapsulates the two things that must be done a specific way on Windows:
 
 from __future__ import annotations
 
+import ctypes
 import os
 import re
 import subprocess
 import sys
 import time
+from ctypes import wintypes
 
 import psutil
 
@@ -28,6 +30,37 @@ log = get_logger(__name__)
 
 #: Confirmed packaged app id for Codex Desktop.
 CODEX_APP_ID = r"OpenAI.Codex_2p2nqsd0c76g0!App"
+CODEX_DESKTOP_DOWNLOAD_URL = "https://learn.chatgpt.com/docs/windows/windows-app"
+DESKTOP_MISSING_MESSAGE = "Codex Desktop is not installed. Install the official ChatGPT desktop app with Codex, then check again. Account switching has not started."
+
+
+def is_desktop_installed() -> bool:
+    """Check the current user's registered package without launching Explorer."""
+    if sys.platform != "win32":
+        return False
+    function = ctypes.WinDLL("kernel32", use_last_error=True).GetPackagesByPackageFamily
+    function.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.POINTER(wintypes.UINT),
+        ctypes.POINTER(wintypes.LPWSTR),
+        ctypes.POINTER(wintypes.UINT),
+        wintypes.LPWSTR,
+    ]
+    function.restype = wintypes.LONG
+    count, length = wintypes.UINT(), wintypes.UINT()
+    code = function(
+        CODEX_APP_ID.split("!", 1)[0], ctypes.byref(count), None, ctypes.byref(length), None
+    )
+    if code not in (0, 122):
+        raise OSError("Codex Desktop installation could not be checked. Retry in Settings.")
+    return count.value > 0
+
+
+def require_desktop_installed() -> None:
+    from codex_account_manager.core.errors import DesktopLaunchError
+
+    if not is_desktop_installed():
+        raise DesktopLaunchError(DESKTOP_MISSING_MESSAGE)
 
 
 def _process_has_exited(pid: int) -> bool:
@@ -115,6 +148,7 @@ def is_desktop_running() -> bool:
 
 def launch_desktop() -> None:
     """Launch the packaged Codex Desktop by App ID (the reliable method)."""
+    require_desktop_installed()
     subprocess.Popen(
         [
             os.path.join(os.environ.get("SystemRoot", "C:/Windows"), "explorer.exe"),

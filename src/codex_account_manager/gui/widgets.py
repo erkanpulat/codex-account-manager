@@ -296,6 +296,13 @@ class AccountRow(QFrame):
         root.addWidget(self._identity, 0, 0, Qt.AlignmentFlag.AlignVCenter)
 
         state, tone = account_status(health)
+        from codex_account_manager.continuity.policy import automatic_exclusion_reason
+
+        exclusion = automatic_exclusion_reason(health)
+        if exclusion and not health.error and not health.stale and health.account_match is True:
+            candidate_hint = label(tr(exclusion), "Caption")
+            candidate_hint.setWordWrap(True)
+            root.addWidget(candidate_hint, 2, 0, 1, 5)
 
         self._primary_usage = UsageBar(tr("5-hour remaining"), palette)
         self._secondary_usage = UsageBar(tr("Weekly remaining"), palette)

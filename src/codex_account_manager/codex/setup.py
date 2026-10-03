@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 
 from codex_account_manager.codex.runtime import codex_command, find_codex
@@ -15,7 +16,9 @@ from codex_account_manager.core.errors import CodexNotFoundError
 from codex_account_manager.core.operation_lock import OperationLock
 from codex_account_manager.core.paths import paths
 
-INSTALL_URL = "https://chatgpt.com/codex/install.ps1"
+# The documented chatgpt.com URL redirects here. Fetch the canonical official
+# endpoint directly so unexpected redirects still cannot supply executable code.
+INSTALL_URL = "https://releases.openai.com/codex/install.ps1"
 DOCS_URL = "https://learn.chatgpt.com/docs/codex/cli"
 
 
@@ -47,13 +50,15 @@ def cli_version() -> str | None:
     raise RuntimeError("Codex CLI was found but could not be started. Check your installation.")
 
 
-def install_cli() -> str:
+def install_cli(on_progress: Callable[[str], None] | None = None) -> str:
     if sys.platform != "win32":
         raise RuntimeError("Automatic CLI installation requires Windows.")
     with OperationLock(paths.data_dir / "cli-install.lock"):
         existing = cli_version()
         if existing:
             return existing
+        if on_progress:
+            on_progress("download")
         request = urllib.request.Request(INSTALL_URL, headers={"User-Agent": "QuotaCrew"})
         try:
             with urllib.request.build_opener(_NoRedirects()).open(request, timeout=30) as response:
@@ -63,6 +68,8 @@ def install_cli() -> str:
             if not script or len(script) > 1024 * 1024:
                 raise RuntimeError("The official CLI installer could not be verified.")
             script.decode("utf-8-sig")
+            if on_progress:
+                on_progress("install")
             powershell = (
                 Path(os.environ.get("SystemRoot", "C:/Windows"))
                 / "System32/WindowsPowerShell/v1.0/powershell.exe"
@@ -98,6 +105,8 @@ def install_cli() -> str:
             raise RuntimeError(
                 "Codex CLI installation did not finish. Retry or use the official installation guide."
             ) from exc
+        if on_progress:
+            on_progress("verify")
         version = cli_version()
         if not version:
             raise RuntimeError(

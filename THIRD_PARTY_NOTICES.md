@@ -13,6 +13,7 @@ open-source packages, each distributed under its own license:
 | psutil | Process inspection | BSD-3-Clause |
 | pywin32 | Windows APIs | PSF |
 | PySide6 / Shiboken / Qt (optional, `[gui]`) | Qt for Python GUI | LGPL-3.0; third-party components retain their own licenses |
+| PyWinRT / winrt-runtime / Windows.ApplicationModel / Windows.Foundation (optional, `[store]`) | Packaged Windows startup task | MIT |
 
 Refer to each project's distribution for the authoritative license text. The
 PySide6 GUI dependency is optional and required for the graphical application.
@@ -34,7 +35,15 @@ Unmodified corresponding sources are available from
 You may replace the shared libraries with compatible modified versions and
 reverse-engineer the application to debug those modifications. The application
 source and build instructions are provided in this repository; rebuild it with
-your modified dependency if required. No signing lock prevents replacement.
+your modified dependency if required. Direct-download EXE distributions do not
+lock replacement of these libraries through package signing.
+For MSIX distributions, compatible modified builds can be produced from the
+published source and installed separately using the developer's own signing
+identity. The packaged installation is protected by Windows package integrity;
+editing libraries inside a Store-installed package is not supported. The
+availability and sufficiency of the corresponding-source and installation
+instructions must be reviewed before the first Store submission.
+
 Python and the PyInstaller bootloader retain their own licenses, included in
 the same notice file. The bootloader's exception permits distributing this app
 under its MIT license.

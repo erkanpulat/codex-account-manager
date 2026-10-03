@@ -68,13 +68,18 @@ async def test_reader_reply_failure_wakes_requests_and_continuation(monkeypatch)
 async def test_cancelled_close_kills_child_and_releases_transport():
     server = CodexAppServer("test")
     waiting = asyncio.Event()
+    exited = asyncio.Event()
 
     async def wait():
         waiting.set()
-        await asyncio.Event().wait()
+        await exited.wait()
+
+    def killed():
+        process.returncode = -9
+        exited.set()
 
     process = SimpleNamespace(
-        returncode=None, stdin=None, wait=wait, kill=Mock(), _transport=Mock()
+        returncode=None, stdin=None, wait=wait, kill=Mock(side_effect=killed), _transport=Mock()
     )
     server._proc = process
     closing = asyncio.create_task(server.aclose())

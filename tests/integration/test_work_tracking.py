@@ -420,6 +420,7 @@ async def test_desktop_source_requires_native_proof_before_preparing_ticket(migr
     from codex_account_manager.core.errors import AppServerError, DesktopContinuationRequired
 
     server = FakeAppServer(turns={"t": _limited_turn()})
+    server.is_desktop_thread = AsyncMock(return_value=True)
     server.require_headless_compatible = AsyncMock(
         side_effect=DesktopContinuationRequired("external")
     )

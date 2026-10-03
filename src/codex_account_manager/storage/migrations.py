@@ -279,7 +279,9 @@ def _backup_db() -> None:
 
 
 async def _verify_account_catalogue() -> None:
-    if not next(paths.profiles_dir.glob("*/auth.json"), None):
+    if not any(
+        next(paths.profiles_dir.glob(pattern), None) for pattern in ("*/auth.json", "*/auth.dpapi")
+    ):
         return
     if paths.db_path.is_file():
         async with aiosqlite.connect(paths.db_path.as_uri() + "?mode=ro", uri=True) as db:

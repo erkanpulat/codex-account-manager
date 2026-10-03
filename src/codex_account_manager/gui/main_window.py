@@ -180,6 +180,10 @@ class MainWindow(QMainWindow):
         details = QPushButton(tr("Diagnostics"))
         details.clicked.connect(lambda: self._open_tool(5))
         notice_layout.addWidget(details)
+        self.desktop_download = QPushButton(tr("Official Desktop download"))
+        self.desktop_download.clicked.connect(self._open_desktop_download)
+        self.desktop_download.hide()
+        notice_layout.addWidget(self.desktop_download)
         dismiss = QPushButton(tr("Close"))
         dismiss.clicked.connect(self.notice.hide)
         notice_layout.addWidget(dismiss)
@@ -298,6 +302,8 @@ class MainWindow(QMainWindow):
         self.updates.available.connect(self._update_available)
         self.settings.policy_changed.connect(self._policy_changed)
         self.settings.continuation_changed.connect(self._continuation_changed)
+        self.settings.desktop.availability_changed.connect(self._desktop_availability_changed)
+        self.settings.ide.availability_changed.connect(self._ide_availability_changed)
         self.settings.interval.valueChanged.connect(
             lambda _value: self._policy_changed(self.settings.policy.currentData())
         )
@@ -378,19 +384,37 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "desktop_badge"):
             return
         enabled = self._monitor_enabled and self.settings.auto_continue.isChecked()
-        for badge, name, checked in (
-            (self.desktop_badge, "Desktop", self.settings.auto_continue.isChecked()),
-            (self.ide_badge, "IDE", self.settings.ide_continue.isChecked()),
+        for badge, name, checked, available in (
+            (
+                self.desktop_badge,
+                "Desktop",
+                self.settings.desktop_continue.isChecked(),
+                getattr(self, "_desktop_available", None),
+            ),
+            (
+                self.ide_badge,
+                "IDE",
+                self.settings.ide_continue.isChecked(),
+                getattr(self, "_ide_available", None),
+            ),
         ):
             badge.setText(
                 tr(
                     "{surface}: {state}",
                     surface=name,
-                    state=tr("Off") if not checked else tr("Enabled") if enabled else tr("Paused"),
+                    state=tr("Off")
+                    if not checked
+                    else tr("Needs setup")
+                    if available is False
+                    else tr("Check connection")
+                    if available is None
+                    else tr("Enabled")
+                    if enabled
+                    else tr("Paused"),
                 )
             )
-            badge.setVisible(checked)
-            badge.setProperty("tone", "primary" if enabled and checked else "muted")
+            badge.setVisible(True)
+            badge.setProperty("tone", "primary" if enabled and checked and available else "muted")
             badge.style().unpolish(badge)
             badge.style().polish(badge)
         self.work_badge.setText(tr("{count} running", count=self._running_work))
@@ -399,6 +423,22 @@ class MainWindow(QMainWindow):
         )
         if hasattr(self, "tray"):
             self._update_tray_status()
+
+    def _desktop_availability_changed(self, available) -> None:
+        self._desktop_available = available
+        self._continuation_changed()
+
+    def _ide_availability_changed(self, available) -> None:
+        self._ide_available = available
+        self._continuation_changed()
+
+    def _open_desktop_download(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        from codex_account_manager.platform.windows import CODEX_DESKTOP_DOWNLOAD_URL
+
+        QDesktopServices.openUrl(QUrl(CODEX_DESKTOP_DOWNLOAD_URL))
 
     def _power_status(self, message: str, active: bool) -> None:
         self._power_active = active
@@ -418,6 +458,20 @@ class MainWindow(QMainWindow):
         )
         self.tray_auto.setChecked(self.settings.auto_continue.isChecked())
         self.tray_ide.setChecked(self.settings.ide_continue.isChecked())
+        self.tray_auto.setText(
+            tr("Auto continue")
+            + " · "
+            + tr(
+                "Off"
+                if not self.settings.auto_continue.isChecked()
+                else "Enabled"
+                if self._monitor_enabled
+                else "Paused"
+            )
+        )
+        self.tray_desktop.setChecked(self.settings.desktop_continue.isChecked())
+        self.tray_desktop.setText(self.desktop_badge.text())
+        self.tray_ide.setText(self.ide_badge.text())
         self.tray_work.setText(work)
         self.tray_power_status.setText(
             tr("Shutdown plan active") if self._power_active else tr("Shutdown is off.")
@@ -617,7 +671,7 @@ class MainWindow(QMainWindow):
                 self,
                 tr("Switch account"),
                 tr(
-                    "Switch to '{alias}'? Codex Desktop will restart. Save your work first; conversation history is preserved.",
+                    "Switch to '{alias}'? An installed Codex Desktop app will restart; Desktop is not required. Save your work first; conversation history is preserved.",
                     alias=alias,
                 ),
             )
@@ -643,6 +697,7 @@ class MainWindow(QMainWindow):
             tr("Switched to {alias}. Shared history preserved.", alias=alias)
         )
         self.notice.hide()
+        self.desktop_download.hide()
         self._show_toast(tr("Account switched successfully."))
         self.dashboard.refresh()
 
@@ -652,6 +707,16 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(tr("Switch failed. Check the error and Diagnostics."))
         self.notice_text.setText(tr("Switch failed") + ": " + tr(str(exc)))
         self.notice.show()
+        from codex_account_manager.platform.windows import DESKTOP_MISSING_MESSAGE
+
+        missing = str(exc) == DESKTOP_MISSING_MESSAGE
+        self.desktop_download.setVisible(missing)
+        if missing:
+            self._desktop_availability_changed(False)
+        # A transaction holds the shared operation lock. Refresh after its
+        # release so a transient busy observation does not look like lost sign-in.
+        self.dashboard.refresh()
+        self.accounts_view.refresh()
 
     @Slot(str)
     def _operation_failed(self, message: str) -> None:
@@ -793,6 +858,8 @@ class MainWindow(QMainWindow):
                 self.notice.show()
             else:
                 if event.payload.get("state") in {
+                    "running",
+                    "refreshing_ide",
                     "ide_submitted",
                     "desktop_submitted",
                     "completed",
@@ -839,6 +906,12 @@ class MainWindow(QMainWindow):
         self.tray_ide.setCheckable(True)
         self.tray_ide.triggered.connect(
             lambda checked: self.settings.ide_continue.setChecked(checked)
+        )
+
+        self.tray_desktop = menu.addAction(tr("Desktop continuation"))
+        self.tray_desktop.setCheckable(True)
+        self.tray_desktop.triggered.connect(
+            lambda checked: self.settings.desktop_continue.setChecked(checked)
         )
 
         menu.addSeparator()

@@ -46,3 +46,22 @@ def test_unknown_editor_is_not_a_command(tmp_path, monkeypatch):
     monkeypatch.setattr(editors, "installed_editors", lambda: {})
     with pytest.raises(ValueError):
         editors.open_project("arbitrary.exe", str(tmp_path))
+
+
+def test_ide_prerequisites_do_not_require_desktop_or_launch_programs(tmp_path, monkeypatch):
+    executable = tmp_path / "Code.exe"
+    monkeypatch.setattr(editors, "installed_editors", lambda: {})
+    monkeypatch.setattr(editors.Path, "home", lambda: tmp_path)
+    monkeypatch.delenv("VSCODE_EXTENSIONS", raising=False)
+    spawn = Mock()
+    monkeypatch.setattr(editors.subprocess, "Popen", spawn)
+    assert editors.vscode_connection_status() == "missing_editor"
+    monkeypatch.setattr(editors, "installed_editors", lambda: {"VS Code": executable})
+    assert editors.vscode_connection_status() == "extension_undetected"
+    manifest = tmp_path / ".vscode/extensions/openai.chatgpt-1.0.0/package.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text('{"publisher":"OpenAI","name":"chatgpt"}', encoding="utf-8")
+    assert editors.vscode_connection_status() == "installed"
+    manifest.write_text('{"publisher":"notOpenAI","name":"chatgpt"}', encoding="utf-8")
+    assert editors.vscode_connection_status() == "extension_undetected"
+    spawn.assert_not_called()

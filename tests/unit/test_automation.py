@@ -25,6 +25,30 @@ async def prepared(supervisor):
     return replace(ticket, account_id="acc-1")
 
 
+@pytest.mark.parametrize("surface", ["desktop", "ide"])
+async def test_disabled_native_surface_never_falls_back_to_other_owner(migrated_db, surface):
+    from unittest.mock import AsyncMock
+
+    from codex_account_manager.core.errors import DesktopContinuationRequired
+
+    server = ExecutionServer()
+
+    async def native_only(_thread):
+        raise DesktopContinuationRequired("native owner required")
+
+    server.require_headless_compatible = native_only
+    server.is_desktop_thread = AsyncMock(return_value=surface == "desktop")
+    supervisor = ContinuationSupervisor(factory=lambda: server)
+    supervisor.native.inspect = AsyncMock(side_effect=AssertionError("disabled surface"))
+    supervisor.ide.inspect = AsyncMock(side_effect=AssertionError("disabled surface"))
+    await SettingsRepository().set("desktop_continue", "false" if surface == "desktop" else "true")
+    await SettingsRepository().set("ide_continue", "false" if surface == "ide" else "true")
+    assert await supervisor.prepare("thread") is None
+    supervisor.native.inspect.assert_not_awaited()
+    supervisor.ide.inspect.assert_not_awaited()
+    assert server.closed and not server.turn_calls
+
+
 @pytest.mark.parametrize("status", ["paused", "blocked", "complete", "budgetLimited", "unknown"])
 def test_native_goal_states_are_never_automatically_reactivated(status):
     assert not goal_allows_continuation(goal(status))
@@ -392,7 +416,8 @@ async def test_disable_signal_cancels_running_work_and_releases_locks(migrated_d
 
 
 @pytest.mark.parametrize("owner", ["cli", "desktop", "ide"])
-async def test_disabling_ide_only_cancels_ide_workers(migrated_db, owner):
+@pytest.mark.parametrize("scope", ["ide", "desktop"])
+async def test_disabling_surface_only_cancels_its_workers(migrated_db, owner, scope):
     from codex_account_manager.core.operation_lock import OperationLock
 
     server = ExecutionServer()
@@ -412,10 +437,10 @@ async def test_disabling_ide_only_cancels_ide_workers(migrated_db, owner):
     task = asyncio.create_task(supervisor.run(ticket))
     try:
         await asyncio.wait_for(connected.wait(), 2)
-        bus.publish("continuation.stop", scope="ide")
+        bus.publish("continuation.stop", scope=scope)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
-        if owner != "ide":
+        if owner != scope:
             assert not task.done() and not task.cancelling()
             bus.publish("continuation.stop")
         with pytest.raises(asyncio.CancelledError):
@@ -428,14 +453,25 @@ async def test_disabling_ide_only_cancels_ide_workers(migrated_db, owner):
         pass
 
 
-async def test_disabled_ide_drops_only_its_pending_work_while_account_is_unavailable(migrated_db):
+@pytest.mark.parametrize("surface", ["ide", "desktop"])
+async def test_disabled_surface_drops_only_its_pending_work_while_account_is_unavailable(
+    migrated_db, surface
+):
     server = ExecutionServer()
     supervisor = ContinuationSupervisor(factory=lambda: server)
     ticket = await prepared(supervisor)
     await supervisor.save_pending(
-        [ticket, replace(ticket, thread_id="ide", desktop=True, owner_id="ide-owner")]
+        [
+            ticket,
+            replace(
+                ticket,
+                thread_id=surface,
+                desktop=True,
+                owner_id="ide-owner" if surface == "ide" else None,
+            ),
+        ]
     )
-    await SettingsRepository().set("ide_continue", "false")
+    await SettingsRepository().set(surface + "_continue", "false")
     await supervisor.recover_pending(None)
     assert not supervisor.tasks and not server.turn_calls
     async with connect() as db:
@@ -494,6 +530,7 @@ async def test_desktop_preparation_never_claims_or_resumes_conversation(migrated
     supervisor = ContinuationSupervisor(factory=lambda: server)
     from unittest.mock import AsyncMock
 
+    server.is_desktop_thread = AsyncMock(return_value=True)
     supervisor.native.latest_turn = AsyncMock(return_value=server.latest)
     ticket = await supervisor.prepare("thread")
     assert ticket is not None and ticket.desktop

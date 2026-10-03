@@ -24,6 +24,7 @@ from codex_account_manager.core.files import restrict_access
 from codex_account_manager.core.operation_lock import OperationLock
 from codex_account_manager.core.paths import paths
 from codex_account_manager.core.windows_shell import launch_from_explorer
+from codex_account_manager.platform import package
 
 REPOSITORY = "erkanpulat/codex-quotacrew"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
@@ -122,6 +123,7 @@ def _open(url: str):
 
 
 def latest_release() -> Release | None:
+    _require_direct_distribution()
     try:
         with _open(API_URL) as response:
             body = response.read(1024 * 1024 + 1)
@@ -229,6 +231,7 @@ def _download(release: Release, cancelled: threading.Event) -> Path:
 
 
 async def download(release: Release) -> Path:
+    _require_direct_distribution()
     cancelled = threading.Event()
     try:
         return await asyncio.to_thread(_download, release, cancelled)
@@ -237,6 +240,7 @@ async def download(release: Release) -> Path:
 
 
 def begin_install(release: Release, installer: Path) -> OperationLock:
+    _require_direct_distribution()
     directory = installed_directory()
     if directory is None:
         raise UpdateError("Portable and source installations are updated from the release page.")
@@ -292,3 +296,8 @@ def begin_install(release: Release, installer: Path) -> OperationLock:
     except Exception:
         lock.__exit__(None, None, None)
         raise
+
+
+def _require_direct_distribution() -> None:
+    if package.is_packaged():
+        raise UpdateError("Updates for this installation are managed by Microsoft Store.")

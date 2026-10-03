@@ -24,7 +24,16 @@ def test_missing_cli_is_distinct_from_broken_cli(monkeypatch):
     assert setup.cli_version() is None
 
 
-@pytest.mark.parametrize("url", ["file:///private", "http://chatgpt.com", "https://example.com"])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "file:///private",
+        "http://chatgpt.com",
+        "https://example.com",
+        "https://releases.openai.com.evil.example/codex/install.ps1",
+        "https://releases.openai.com/codex/other.ps1",
+    ],
+)
 def test_official_installer_rejects_redirects(url):
     with pytest.raises(RuntimeError, match="could not be verified"):
         setup._NoRedirects().redirect_request(None, None, 302, "", {}, url)
@@ -55,7 +64,9 @@ def test_install_only_when_missing_and_verifies_result(tmp_paths, monkeypatch, e
     monkeypatch.setattr(setup.subprocess, "run", run)
     monkeypatch.setenv("CODEX_INSTALL_DIR", "unrelated")
     monkeypatch.setenv("CODEX_HOME", "unrelated-profile")
-    assert setup.install_cli() == "0.143.0"
+    stages = []
+    assert setup.install_cli(stages.append) == "0.143.0"
+    assert stages == ([] if existing else ["download", "install", "verify"])
     if existing:
         network.assert_not_called()
         run.assert_not_called()
@@ -68,3 +79,28 @@ def test_install_only_when_missing_and_verifies_result(tmp_paths, monkeypatch, e
         assert "CODEX_HOME" not in env
         assert not __import__("pathlib").Path(arguments[-1]).exists()
         assert version.call_count == 2
+
+
+@pytest.mark.parametrize(
+    ("url", "script"),
+    [
+        ("https://example.com/install.ps1", b"synthetic"),
+        (setup.INSTALL_URL, b""),
+        (setup.INSTALL_URL, b"x" * (1024 * 1024 + 1)),
+        (setup.INSTALL_URL, b"\xff"),
+    ],
+    ids=["unexpected-url", "empty-script", "oversized-script", "invalid-utf8"],
+)
+def test_unverified_installer_never_runs(tmp_paths, monkeypatch, url, script):
+    if setup.sys.platform != "win32":
+        pytest.skip("Windows installer")
+    monkeypatch.setattr(setup, "cli_version", lambda: None)
+    response = io.BytesIO(script)
+    response.url = url
+    network = Mock(return_value=response)
+    monkeypatch.setattr(setup.urllib.request, "build_opener", lambda *_: Mock(open=network))
+    run = Mock()
+    monkeypatch.setattr(setup.subprocess, "run", run)
+    with pytest.raises(RuntimeError):
+        setup.install_cli()
+    run.assert_not_called()

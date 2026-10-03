@@ -2,10 +2,35 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from codex_account_manager.domain.models import ProfileHealth
 from codex_account_manager.domain.states import QuotaState, SwitchPolicyKind
+
+# This is our conservative automatic-selection policy, not a model entitlement
+# table. New/unknown plans need explicit support; users can still switch manually.
+AUTOMATIC_PLANS = frozenset({"plus", "pro", "team", "business", "enterprise", "edu"})
+
+
+def automatic_exclusion_reason(h: ProfileHealth) -> str | None:
+    plan = h.plan_type.strip().casefold() if isinstance(h.plan_type, str) else ""
+    if plan == "free":
+        return (
+            "Free plan: manual switching only; quota percentages do not prove model compatibility."
+        )
+    if plan not in AUTOMATIC_PLANS:
+        return "Plan not verified for automatic selection. You can switch manually."
+    percentages = (h.primary_used_percent, h.secondary_used_percent)
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        or not 0 <= value <= 100
+        for value in percentages
+    ):
+        return "Quota figures are incomplete or invalid. Automatic selection waits for verified limits."
+    return None
 
 
 @dataclass(frozen=True)
@@ -55,12 +80,15 @@ class SwitchPolicy:
         available = [
             c
             for c in candidates
-            if self._is_available(c) and (current is None or c.profile_id != current.profile_id)
+            if self._is_available(c)
+            and c.ordinary_usage_allowed is True
+            and automatic_exclusion_reason(c) is None
+            and (current is None or c.profile_id != current.profile_id)
         ]
         if not available:
             return None
         # Prefer the profile with the most headroom (lowest peak usage).
-        return min(available, key=_peak_usage)
+        return min(available, key=lambda h: (_peak_usage(h), h.alias.casefold(), h.profile_id))
 
 
 class ConfirmPolicy(SwitchPolicy):
@@ -104,7 +132,11 @@ class AvailabilityFailoverPolicy(SwitchPolicy):
 
 
 def _peak_usage(h: ProfileHealth) -> float:
-    return max(h.primary_used_percent or 0.0, h.secondary_used_percent or 0.0)
+    # Unknown values must never win a headroom comparison as zero usage.
+    return max(
+        h.primary_used_percent if h.primary_used_percent is not None else math.inf,
+        h.secondary_used_percent if h.secondary_used_percent is not None else math.inf,
+    )
 
 
 _POLICIES: dict[SwitchPolicyKind, type[SwitchPolicy]] = {

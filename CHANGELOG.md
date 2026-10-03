@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.2 — 2026-10-03
+
+- Keep direct-download updates separate from packaged Windows installations and add an in-app bilingual privacy policy.
+- Protect saved Windows profile credentials and switch-recovery snapshots with user-scoped DPAPI; preserve refreshed credentials, serialize profile access and clean up owned Codex child processes before sealing credentials.
+- Redesign onboarding with a four-step sidebar, setup cards, clear preferences and an optional desktop shortcut action shared with Settings.
+- Show CLI installation phases, an indeterminate progress indicator and elapsed time; keep retries available after errors and prevent duplicate installations.
+- Default new setup to automatic switching when usage is limited, with automatic continuation, experimental IDE continuation and VS Code refresh enabled; preserve saved preferences during updates.
+- Clear stale attention banners when the affected conversation resumes, while retaining issues for other conversations.
+- Complete Turkish setup descriptions and keep disabled/paused continuation visible in status badges and the tray menu.
+- Check optional Desktop and VS Code prerequisites independently in onboarding and Settings. Account switching works without Desktop; disabled IDE conversations never fall back to the Desktop connection.
+- Add a separate Desktop continuation preference and scope cancellation/recovery to the selected surface so other CLI/IDE/Desktop work remains independent.
+- Exclude Free and unknown plans from automatic/suggested switching while preserving manual activation; reject incomplete or invalid quota figures instead of treating missing usage as zero. Explain automatic-selection exclusions on account rows.
+- Redesign automatic shutdown with selectable condition cards, duration presets, a live plan summary and countdown; keep confirmation, session-only plans and page/tray cancellation, with scrollable controls on small screens.
+
 ## 0.2.1 — 2026-10-02
 
 - Redesign automatic shutdown with selected-work, all-limits and elapsed-time modes, contextual inputs and conversation selection on the same page.

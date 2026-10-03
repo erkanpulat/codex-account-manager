@@ -7,6 +7,7 @@ other platforms (so the core stays importable and testable off-Windows).
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -27,8 +28,13 @@ class SingleInstance:
             ...
     """
 
-    def __init__(self, name: str = _MUTEX_NAME):
-        self.name = name
+    def __init__(self, name: str | None = None):
+        self.name = name or _MUTEX_NAME
+        if name is None and os.environ.get("WIN_PD_OVERRIDE_LOCAL_APPDATA"):
+            # An explicitly isolated data home must not acquire the daily app's
+            # mutex. Keep the legacy mutex for normal installs and upgrades.
+            directory = os.path.normcase(str(paths.data_dir.resolve()))
+            self.name += "." + hashlib.sha256(directory.encode("utf-8")).hexdigest()[:16]
         self.acquired = False
         self._handle = None
         self._lock_path: Path | None = None
